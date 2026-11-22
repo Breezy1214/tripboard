@@ -1,0 +1,25 @@
+node_modules
+dist
+.wrangler
+.wrangler.deepspace.*.toml
+.dev.vars
+.dev.vars.*
+.deepspace
+.worker-bundle.js
+*.tgz
+test-results/
+playwright-report/
+src/router.ts
+src/modals.tsx
+.claude/launch.json
+.claude/worktrees
+
+# Internal docs: planning, notes, agent logs. Never commit.
+/tasks/
+/BRAINSTORM.md
+/DEEPSPACE_NOTES.md
+/TECH_STACK.md
+/internal/
+/.claude/
+CLAUDE.md
+AGENTS.md
