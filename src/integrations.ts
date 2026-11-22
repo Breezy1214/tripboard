@@ -28,4 +28,5 @@ export const integrations: Record<
   composio: { billing: 'user' },
   // Owner-billed, called only from server actions behind daily caps.
   openweathermap: { billing: 'developer' },
+  serpapi: { billing: 'developer' },
 }

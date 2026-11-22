@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker.js'
-import { DAILY_CAPS, forecastFromOpenMeteo, placeFromGeocoding, reservePaidCall, takeFreeQuota } from './trip-services'
+import { DAILY_CAPS, PAID_COSTS, forecastFromOpenMeteo, placeFromGeocoding, reservePaidCall, takeFreeQuota } from './trip-services'
 
 const env = {} as Env
 
@@ -81,6 +81,38 @@ describe('spend caps', () => {
     while (await takeFreeQuota(env, tools, 'u1', 'trip')) granted++
     expect(granted).toBe(DAILY_CAPS.trip)
     expect(rows.size).toBe(DAILY_CAPS.trip)
+  })
+
+  it('caps AI chat turns and place searches per user, under bursts too', async () => {
+    for (const kind of ['chat', 'places'] as const) {
+      const { tools, rows } = fakeUsageRoom()
+      const granted = (await burst(40, () => reservePaidCall(env, tools, 'u1', kind))).filter((r) => r.ok).length
+      expect(granted).toBeLessThanOrEqual(DAILY_CAPS[kind])
+      expect(rows.size).toBe(granted)
+
+      const sequential = fakeUsageRoom({ jitter: false })
+      const results = []
+      for (let i = 0; i < DAILY_CAPS[kind] + 1; i++) results.push(await reservePaidCall(env, sequential.tools, 'u1', kind))
+      expect(results.filter((r) => r.ok)).toHaveLength(DAILY_CAPS[kind])
+      expect(results.at(-1)).toEqual({ ok: false, reason: 'user_cap' })
+    }
+  })
+
+  it('counts every paid kind against one app-wide ceiling', async () => {
+    const { tools } = fakeUsageRoom({ jitter: false })
+    let credits = 0
+    let i = 0
+    while ((await reservePaidCall(env, tools, `p${i++}`, 'places')).ok) credits += PAID_COSTS.places
+    while ((await reservePaidCall(env, tools, `c${i++}`, 'chat')).ok) credits += PAID_COSTS.chat
+    expect(credits).toBeLessThanOrEqual(DAILY_CAPS.appCredits)
+    expect(credits).toBeGreaterThan(DAILY_CAPS.appCredits - PAID_COSTS.chat)
+    expect(await reservePaidCall(env, tools, 'late', 'geocode')).toEqual({ ok: false, reason: 'app_cap' })
+
+    const burstRoom = fakeUsageRoom()
+    const mixed = await burst(200, (i) => reservePaidCall(env, burstRoom.tools, `m${i}`, i % 2 ? 'chat' : 'places'))
+    const spent = [...burstRoom.rows.values()].reduce((sum, r) => sum + Number(r.credits), 0)
+    expect(spent).toBeLessThanOrEqual(DAILY_CAPS.appCredits)
+    expect(mixed.filter((r) => r.ok)).toHaveLength(burstRoom.rows.size)
   })
 })
 

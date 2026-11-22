@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, useMutations, usePresenceRoom, useQuery, useUser, useUserLookup, type RecordData } from 'deepspace'
-import { ArrowLeft, CalendarDays, MapPin, Trash2, WifiOff } from 'lucide-react'
+import { ArrowLeft, CalendarDays, MapPin, Sparkles, Trash2, WifiOff } from 'lucide-react'
 import { Button, ConfirmModal, useToast } from '@/components/ui'
 import { DayColumn, type Viewer } from '../../../../components/trip/DayColumn'
 import type { ForecastLoad } from '../../../../components/trip/DayWeather'
@@ -12,6 +12,13 @@ import { formatDay, formatRange, todayIso, tripDays, tripOverlapsForecast } from
 import type { Stop, TeamMember, Trip } from '../../../../types'
 
 const FORECAST_TTL_MS = 60 * 60 * 1000
+
+// The chat brings markdown and code highlighting; load it after the board.
+const TripChat = lazy(() => import('../../../../components/trip/TripChat').then((m) => ({ default: m.TripChat })))
+
+function wideScreen() {
+  return typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+}
 
 export default function TripPage() {
   const { tripId = '' } = useParams()
@@ -67,6 +74,7 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
   const [forecastLoad, setForecastLoad] = useState<ForecastLoad>('idle')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [chatOpen, setChatOpen] = useState(wideScreen)
 
   const today = todayIso()
   const { startDate, endDate, lat, lon, forecast, forecastAt } = trip.data
@@ -162,115 +170,137 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="border-b border-border bg-background/80 px-4 py-4 sm:px-6">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <Link to="/home" className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-              <ArrowLeft aria-hidden className="size-3" /> All trips
-            </Link>
-            <h1 data-testid="trip-name" className="truncate text-2xl font-semibold tracking-tight text-foreground">
-              {trip.data.name}
-            </h1>
-            <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <MapPin aria-hidden className="size-3.5" /> {trip.data.placeLabel || trip.data.destination}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <CalendarDays aria-hidden className="size-3.5" /> {formatRange(startDate, endDate)}
-              </span>
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div data-testid="trip-members" className="flex items-center -space-x-2">
-              {userId && (
-                <PersonAvatar userId={userId} name={user?.name || 'You'} imageUrl={user?.imageUrl} title="You" />
-              )}
-              {members
-                .filter((m) => m.data.userId !== userId)
-                .map((m) => {
-                  const info = getUser(m.data.userId)
-                  const peer = uniquePeers.find((p) => p.userId === m.data.userId)
-                  const name = peer?.userName || info?.name || 'Trip member'
-                  const online = onlineIds.has(m.data.userId)
-                  return (
-                    <PersonAvatar
-                      key={m.recordId}
-                      userId={m.data.userId}
-                      name={name}
-                      imageUrl={info?.imageUrl}
-                      dimmed={!online}
-                      title={online ? `${name} is ${viewingLabel(peer?.state.day)}` : `${name} (away)`}
-                    />
-                  )
-                })}
+    <div className="flex min-h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="border-b border-border bg-background/80 px-4 py-4 sm:px-6">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <Link to="/home" className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                <ArrowLeft aria-hidden className="size-3" /> All trips
+              </Link>
+              <h1 data-testid="trip-name" className="truncate text-2xl font-semibold tracking-tight text-foreground">
+                {trip.data.name}
+              </h1>
+              <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5">
+                  <MapPin aria-hidden className="size-3.5" /> {trip.data.placeLabel || trip.data.destination}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <CalendarDays aria-hidden className="size-3.5" /> {formatRange(startDate, endDate)}
+                </span>
+              </p>
             </div>
-            <span data-testid="presence-summary" className="text-xs text-muted-foreground">
-              {uniquePeers.length === 0
-                ? 'Only you here'
-                : `${uniquePeers.map((p) => p.userName || 'Someone').join(', ')} here now`}
-            </span>
-            <InviteButton tripId={tripId} />
-            {trip.createdBy === userId && (
-              <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)} aria-label="Delete trip">
-                <Trash2 aria-hidden />
-              </Button>
-            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <div data-testid="trip-members" className="flex items-center -space-x-2">
+                {userId && (
+                  <PersonAvatar userId={userId} name={user?.name || 'You'} imageUrl={user?.imageUrl} title="You" />
+                )}
+                {members
+                  .filter((m) => m.data.userId !== userId)
+                  .map((m) => {
+                    const info = getUser(m.data.userId)
+                    const peer = uniquePeers.find((p) => p.userId === m.data.userId)
+                    const name = peer?.userName || info?.name || 'Trip member'
+                    const online = onlineIds.has(m.data.userId)
+                    return (
+                      <PersonAvatar
+                        key={m.recordId}
+                        userId={m.data.userId}
+                        name={name}
+                        imageUrl={info?.imageUrl}
+                        dimmed={!online}
+                        title={online ? `${name} is ${viewingLabel(peer?.state.day)}` : `${name} (away)`}
+                      />
+                    )
+                  })}
+              </div>
+              <span data-testid="presence-summary" className="text-xs text-muted-foreground">
+                {uniquePeers.length === 0
+                  ? 'Only you here'
+                  : `${uniquePeers.map((p) => p.userName || 'Someone').join(', ')} here now`}
+              </span>
+              <InviteButton tripId={tripId} />
+              {!chatOpen && (
+                <Button variant="outline" size="sm" className="hidden lg:inline-flex" onClick={() => setChatOpen(true)} data-testid="open-chat">
+                  <Sparkles aria-hidden /> Co-planner
+                </Button>
+              )}
+              {trip.createdBy === userId && (
+                <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)} aria-label="Delete trip">
+                  <Trash2 aria-hidden />
+                </Button>
+              )}
+            </div>
           </div>
+          {!ready && (
+            <p className="mx-auto mt-3 flex max-w-7xl items-center gap-1.5 text-xs text-warning">
+              <WifiOff aria-hidden className="size-3.5" /> Connecting. Editing turns on when the board is live.
+            </p>
+          )}
+        </header>
+
+        <div className="flex-1 overflow-x-auto px-4 py-5 sm:px-6">
+          {stopsQuery.status === 'error' ? (
+            <p role="alert" className="text-sm text-destructive">
+              Could not load stops: {stopsQuery.error ?? 'connection failed'}.
+            </p>
+          ) : (
+            <div data-testid="trip-board" className="mx-auto flex max-w-7xl snap-x snap-mandatory gap-4 pb-4">
+              {days.map((day, i) => (
+                <DayColumn
+                  key={day}
+                  tripId={tripId}
+                  day={day}
+                  index={i}
+                  days={days}
+                  today={today}
+                  stops={stopsByDay.get(day) ?? []}
+                  viewers={viewersByDay.get(day) ?? []}
+                  canWrite={ready && stopsQuery.status === 'ready'}
+                  hasLocation={hasLocation}
+                  weather={forecast?.days?.[day]}
+                  forecastLoad={forecastLoad === 'idle' && needsForecast ? 'loading' : forecastLoad}
+                  onFocusDay={setViewDay}
+                  onMove={move}
+                  onSave={save}
+                  onDelete={(id) => removeConfirmed(id)}
+                />
+              ))}
+            </div>
+          )}
+          <p className="mx-auto max-w-7xl text-xs text-muted-foreground">
+            Weather data by{' '}
+            <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
+              Open-Meteo.com
+            </a>
+          </p>
         </div>
-        {!ready && (
-          <p className="mx-auto mt-3 flex max-w-7xl items-center gap-1.5 text-xs text-warning">
-            <WifiOff aria-hidden className="size-3.5" /> Connecting. Editing turns on when the board is live.
-          </p>
-        )}
-      </header>
 
-      <div className="flex-1 overflow-x-auto px-4 py-5 sm:px-6">
-        {stopsQuery.status === 'error' ? (
-          <p role="alert" className="text-sm text-destructive">
-            Could not load stops: {stopsQuery.error ?? 'connection failed'}.
-          </p>
-        ) : (
-          <div data-testid="trip-board" className="mx-auto flex max-w-7xl snap-x snap-mandatory gap-4 pb-4">
-            {days.map((day, i) => (
-              <DayColumn
-                key={day}
-                tripId={tripId}
-                day={day}
-                index={i}
-                days={days}
-                today={today}
-                stops={stopsByDay.get(day) ?? []}
-                viewers={viewersByDay.get(day) ?? []}
-                canWrite={ready && stopsQuery.status === 'ready'}
-                hasLocation={hasLocation}
-                weather={forecast?.days?.[day]}
-                forecastLoad={forecastLoad === 'idle' && needsForecast ? 'loading' : forecastLoad}
-                onFocusDay={setViewDay}
-                onMove={move}
-                onSave={save}
-                onDelete={(id) => removeConfirmed(id)}
-              />
-            ))}
-          </div>
-        )}
-        <p className="mx-auto max-w-7xl text-xs text-muted-foreground">
-          Weather data by{' '}
-          <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
-            Open-Meteo.com
-          </a>
-        </p>
+        <ConfirmModal
+          open={confirmDelete}
+          onClose={() => setConfirmDelete(false)}
+          title="Delete this trip?"
+          description="All days, stops and invite links are removed for every member. This cannot be undone."
+          confirmText="Delete trip"
+          loading={deleting}
+          onConfirm={deleteTrip}
+        />
       </div>
-
-      <ConfirmModal
-        open={confirmDelete}
-        onClose={() => setConfirmDelete(false)}
-        title="Delete this trip?"
-        description="All days, stops and invite links are removed for every member. This cannot be undone."
-        confirmText="Delete trip"
-        loading={deleting}
-        onConfirm={deleteTrip}
-      />
+      {userId && (
+        <Suspense fallback={null}>
+          <TripChat tripId={tripId} userId={userId} open={chatOpen} onClose={() => setChatOpen(false)} />
+        </Suspense>
+      )}
+      {!chatOpen && (
+        <button
+          type="button"
+          onClick={() => setChatOpen(true)}
+          data-testid="open-chat-fab"
+          className="fixed bottom-5 right-5 z-20 inline-flex items-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-lg lg:hidden"
+        >
+          <Sparkles aria-hidden className="size-4" /> Co-planner
+        </button>
+      )}
     </div>
   )
 }

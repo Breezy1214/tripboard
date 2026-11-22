@@ -1,23 +1,11 @@
 import type { ActionHandler, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
-import { addDays, isIsoDate, todayIso, tripDays, tripOverlapsForecast, validateTripDates } from '../lib/trip-dates'
-import {
-  fetchForecast,
-  geocode,
-  getTrip,
-  isTripMember,
-  reservePaidCall,
-  takeFreeQuota,
-} from '../server/trip-services'
+import { addDays, todayIso, validateTripDates } from '../lib/trip-dates'
+import { addStopFor, refreshTripForecast, text } from '../server/board-services'
+import { geocode, getTrip, isTripMember, reservePaidCall, takeFreeQuota } from '../server/trip-services'
 
-const MAX_STOPS_PER_TRIP = 300
-const FORECAST_TTL_MS = 60 * 60 * 1000
 const INVITE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
 const INVITE_CODE = /^[a-z0-9]{10}$/
-
-function text(value: unknown, max: number): string {
-  return typeof value === 'string' ? value.trim().slice(0, max) : ''
-}
 
 function fail(error: string) {
   return { success: false as const, error }
@@ -26,12 +14,6 @@ function fail(error: string) {
 function newInviteCode(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(10))
   return Array.from(bytes, (b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('')
-}
-
-async function nextPosition(tools: ActionTools, tripId: string, day: string): Promise<number> {
-  const res = await tools.query<{ position?: number }>('stops', { where: { tripId, day }, orderBy: 'position', orderDir: 'desc', limit: 1 })
-  const top = res.success ? Number(res.data.records[0]?.data.position ?? 0) : 0
-  return top + 1
 }
 
 async function insertTrip(
@@ -114,31 +96,9 @@ const createSampleTrip: ActionHandler<Env> = async ({ userId, tools, env }) => {
 }
 
 const addStop: ActionHandler<Env> = async ({ userId, params, tools }) => {
-  const tripId = text(params.tripId, 100)
-  const title = text(params.title, 120)
-  const day = params.day
-  if (!title) return fail('Add a title')
-  if (!isIsoDate(day)) return fail('Pick a day')
-  if (!(await isTripMember(tools, tripId, userId))) return fail('You are not a member of this trip')
-  const trip = await getTrip(tools, tripId)
-  if (!trip) return fail('Trip not found')
-  if (!tripDays(trip.data.startDate, trip.data.endDate).includes(day)) return fail('That day is outside the trip')
-
-  const existing = await tools.query('stops', { where: { tripId }, limit: MAX_STOPS_PER_TRIP })
-  if (existing.success && existing.data.records.length >= MAX_STOPS_PER_TRIP) return fail('This trip has too many stops')
-
-  const time = text(params.time, 5)
-  const created = await tools.create('stops', {
-    tripId,
-    day,
-    position: await nextPosition(tools, tripId, day),
-    title,
-    notes: text(params.notes, 1000),
-    time: /^\d{2}:\d{2}$/.test(time) ? time : '',
-    source: 'user',
-  })
-  if (!created.success) return created
-  return { success: true, data: { stopId: created.data.recordId } }
+  const { tripId, day, title, notes, time } = params
+  const result = await addStopFor(tools, userId, { tripId, day, title, notes, time, source: 'user' })
+  return result.success ? { success: true, data: { stopId: result.data.stopId } } : fail(result.error)
 }
 
 const createInvite: ActionHandler<Env> = async ({ userId, params, tools }) => {
@@ -170,21 +130,8 @@ const joinTrip: ActionHandler<Env> = async ({ userId, params, tools }) => {
 }
 
 const refreshForecast: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
-  const tripId = text(params.tripId, 100)
-  if (!(await isTripMember(tools, tripId, userId))) return fail('You are not a member of this trip')
-  const trip = await getTrip(tools, tripId)
-  if (!trip) return fail('Trip not found')
-  const { lat, lon, startDate, endDate, forecastAt } = trip.data
-  if (typeof lat !== 'number' || typeof lon !== 'number') return { success: true, data: { status: 'no_location' } }
-  if (!tripOverlapsForecast(startDate, endDate, todayIso())) return { success: true, data: { status: 'outside_window' } }
-  if (forecastAt && Date.now() - Date.parse(forecastAt) < FORECAST_TTL_MS) {
-    return { success: true, data: { status: 'cached' } }
-  }
-  const forecast = await fetchForecast(env, lat, lon)
-  if (!forecast) return fail('Weather is unavailable right now')
-  const updated = await tools.update('trips', tripId, { forecast, forecastAt: new Date().toISOString() })
-  if (!updated.success) return updated
-  return { success: true, data: { status: 'updated' } }
+  const result = await refreshTripForecast(env, tools, userId, params.tripId)
+  return result.success ? { success: true, data: { status: result.data.status } } : fail(result.error)
 }
 
 const deleteTrip: ActionHandler<Env> = async ({ userId, params, tools }) => {
@@ -192,11 +139,16 @@ const deleteTrip: ActionHandler<Env> = async ({ userId, params, tools }) => {
   const trip = await getTrip(tools, tripId)
   if (!trip) return fail('Trip not found')
   if (trip.createdBy !== userId) return fail('Only the person who created the trip can delete it')
-  for (const [collection, where] of [
+  const chats = await tools.query('ai-chats', { where: { tripId }, limit: 500 })
+  const targets: [string, Record<string, string>][] = [
+    ...(chats.success ? chats.data.records : []).map((chat): [string, Record<string, string>] => ['ai-messages', { chatId: chat.recordId }]),
+    ['ai-chats', { tripId }],
+    ['place_searches', { tripId }],
     ['stops', { tripId }],
     ['trip_invites', { tripId }],
     ['team_members', { teamId: tripId }],
-  ] as const) {
+  ]
+  for (const [collection, where] of targets) {
     for (;;) {
       const res = await tools.deleteWhere(collection, where, 500)
       if (!res.success) return res

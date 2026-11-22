@@ -118,4 +118,16 @@ export const usageSchema: CollectionSchema = {
   permissions: adminReadOnly,
 }
 
-export const tripSchemas = [tripsSchema, stopsSchema, teamMembersSchema, tripInvitesSchema, usageSchema]
+/** Cached place searches, one row per trip and normalized query, written by the search_places tool. */
+export const placeSearchesSchema: CollectionSchema = {
+  name: 'place_searches',
+  columns: [
+    { name: 'tripId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    { name: 'query', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    { name: 'places', storage: 'text', interpretation: { kind: 'json' } },
+  ],
+  uniqueOn: ['tripId', 'query'],
+  permissions: adminReadOnly,
+}
+
+export const tripSchemas = [tripsSchema, stopsSchema, teamMembersSchema, tripInvitesSchema, usageSchema, placeSearchesSchema]

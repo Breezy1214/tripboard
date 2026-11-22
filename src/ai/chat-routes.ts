@@ -2,10 +2,14 @@
  * AI chat routes — multi-turn tool-use via Vercel AI SDK + DeepSpace proxy.
  *
  * Registers four endpoints on the passed-in Hono app:
- *   POST   /api/ai/chats       — create a chat owned by the caller
+ *   POST   /api/ai/chats       — find or create the caller's chat for a trip (members only)
  *   PATCH  /api/ai/chats/:id   — rename / patch a chat
  *   DELETE /api/ai/chats/:id   — delete chat + cascade messages
  *   POST   /api/ai/chat        — streamed assistant turn (the big one)
+ *
+ * Every turn is owner-billed with claude-haiku-5-5 chosen here (a client
+ * modelId is ignored), and is reserved against the caller's daily chat cap and
+ * the app-wide credit ceiling before the model runs.
  *
  * Lives in its own file so worker.ts can stay small and the streaming
  * handler's full context (compaction, tools, persistence, abort handling)
@@ -13,8 +17,9 @@
  */
 
 import type { Context, Hono } from 'hono'
-import { createUIMessageStreamResponse, toUIMessageStream, type ModelMessage } from 'ai'
+import { createUIMessageStreamResponse, isStepCount, streamText, toUIMessageStream, type ModelMessage } from 'ai'
 import {
+  AgentToolError,
   deepSpaceAgentErrorSummary,
   prepareMessagesWithCompaction,
   resolveDeepSpaceAgentModel,
@@ -25,16 +30,20 @@ import {
   createUserToolExecutor,
   DEFAULT_CONTEXT_CONFIG,
   getChat,
-  createChat,
   updateChat,
   deleteChatCascade,
   loadMessages,
   appendMessage,
   loggableError,
 } from 'deepspace/worker'
-import type { AgentToolAccessResult, AgentToolRouteOptions, ChatTurn } from 'deepspace/worker'
-import { schemas } from '../schemas.js'
-import { buildSystemPrompt } from './tools.js'
+import type { ActionTools, AgentToolAccessResult, AgentToolRouteOptions, ChatTurn } from 'deepspace/worker'
+import { createActionTools } from '../server/action-routes.js'
+import { memberTrip } from '../server/board-services.js'
+import { mocksExternalApis, reservePaidCall } from '../server/trip-services.js'
+import { CHAT_MESSAGES, chatErrorText } from './errors.js'
+import { buildTripPrompt } from './prompt.js'
+import { createTestChatModel } from './test-model.js'
+import { loadTripContext } from './tools.js'
 // Type-only — TypeScript strips these at runtime, so no circular import
 // with worker.ts (which imports `registerAiChatRoutes` from this file).
 import type { Env, AppContext } from '../../worker.js'
@@ -52,6 +61,21 @@ function recordRoomStub(env: Env): DurableObjectStub {
 }
 
 const CHAT_MODEL_ID = 'claude-haiku-5-5'
+/** Bounds one turn's spend: tool steps, effort and reply length. */
+const MAX_TOOL_CALLS = 8
+const MAX_OUTPUT_TOKENS = 1024
+
+/** The caller's chat row with its trip, or null when it is missing or someone else's. */
+async function getTripChat(tools: ActionTools, chatId: string, userId: string): Promise<{ tripId: string } | null> {
+  const res = await tools.get<Record<string, unknown>>('ai-chats', chatId)
+  const data = res.success ? (res.data.record?.data as { userId?: string; tripId?: string } | undefined) : undefined
+  return data?.userId === userId && typeof data.tripId === 'string' ? { tripId: data.tripId } : null
+}
+
+async function findTripChat(tools: ActionTools, userId: string, tripId: string): Promise<string | null> {
+  const res = await tools.query('ai-chats', { where: { userId, tripId }, limit: 1 })
+  return res.success ? (res.data.records[0]?.recordId ?? null) : null
+}
 
 // Cap on user-supplied content length. Far above any realistic message;
 // blocks accidental DoS via megabyte payloads.
@@ -87,18 +111,26 @@ export function registerAiChatRoutes(
     return c.json({ error }, access.status)
   }
 
-  // Create a new chat row owned by the caller.
+  // One chat per user per trip: return the caller's existing chat or create it.
   app.post('/api/ai/chats', async (c) => {
     const access = await requireAccess(c)
     if (access instanceof Response) return access
     const { auth } = access
 
-    const body = await c.req.json<{ title?: string }>().catch(() => ({}) as { title?: string })
-    const stub = recordRoomStub(c.env)
-    const chat = await createChat(stub, auth.userId, {
-      title: body.title ?? 'New chat',
-    })
-    return c.json({ chat })
+    const body = await c.req.json<{ tripId?: unknown }>().catch(() => ({}) as { tripId?: unknown })
+    const tripId = typeof body.tripId === 'string' ? body.tripId.slice(0, 100) : ''
+    const tools = createActionTools(c.env, auth.userId, '')
+    const trip = await memberTrip(tools, tripId, auth.userId)
+    if (!trip.success) return c.json({ error: CHAT_MESSAGES.notMember, code: trip.code }, 403)
+
+    const existing = await findTripChat(tools, auth.userId, tripId)
+    if (existing) return c.json({ chat: { recordId: existing } })
+    const created = await tools.create('ai-chats', { userId: auth.userId, tripId, title: trip.data.data.name })
+    if (created.success) return c.json({ chat: { recordId: created.data.recordId } })
+    // A parallel first send won the unique (userId, tripId) row; use it.
+    const raced = await findTripChat(tools, auth.userId, tripId)
+    if (raced) return c.json({ chat: { recordId: raced } })
+    return c.json({ error: 'Could not start the chat' }, 500)
   })
 
   // Rename / patch a chat. Ownership enforced via getChat.
@@ -166,10 +198,27 @@ export function registerAiChatRoutes(
     if (!selectedModel) return c.json({ error: 'Chat model unavailable' }, 503)
 
     const stub = recordRoomStub(c.env)
+    const actionTools = createActionTools(c.env, auth.userId, '')
     const chat = await getChat(stub, chatId, auth.userId)
-    if (!chat) {
+    const tripChat = chat ? await getTripChat(actionTools, chatId, auth.userId) : null
+    if (!chat || !tripChat) {
       console.warn('[ai-chat] REQUEST chat-not-found', { userId: auth.userId, chatId })
       return c.json({ error: 'Chat not found' }, 404)
+    }
+
+    let tripContext: Awaited<ReturnType<typeof loadTripContext>>
+    try {
+      tripContext = await loadTripContext(actionTools, auth.userId, tripChat.tripId)
+    } catch (err) {
+      if (err instanceof AgentToolError) return c.json({ error: CHAT_MESSAGES.notMember, code: err.code }, 403)
+      throw err
+    }
+
+    // Reserved before any model call; a refused turn costs nothing and is not saved.
+    const reservation = await reservePaidCall(c.env, actionTools, auth.userId, 'chat')
+    if (!reservation.ok) {
+      const error = reservation.reason === 'user_cap' ? CHAT_MESSAGES.userCap : CHAT_MESSAGES.appCap
+      return c.json({ error, code: reservation.reason }, 429)
     }
 
     // Load history before writing this turn. `persistTurn` later writes user then
@@ -226,7 +275,7 @@ export function registerAiChatRoutes(
       provider: selectedModel.provider,
       modelId: usedModelId,
     }
-    const baseSystem = buildSystemPrompt(c.env.APP_NAME, schemas)
+    const baseSystem = buildTripPrompt({ ...tripContext, userName: auth.claims.name || 'a traveler' })
 
     // Compaction inserts at most one summary system message at index 0; fold
     // it into the top-level `system` so we don't pass two system roles. Then
@@ -334,28 +383,39 @@ export function registerAiChatRoutes(
       })
     }
 
-    const { result } = streamDeepSpaceAgent(c.env, {
-      profile: 'application',
-      modelId: usedModelId,
+    const streamOptions = {
       instructions: systemText,
       messages,
       tools,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
       // Cancel provider and tool work with the request. `onAbort` then saves
       // any completed steps; a zero-step abort saves nothing.
       abortSignal: c.req.raw.signal,
-      onError: ({ error }) => {
+      onError: ({ error }: { error: unknown }) => {
         console.error(
           `[ai-chat] stream error: ${deepSpaceAgentErrorSummary(error, diagnosticContext)}`,
         )
       },
-      onEnd: ({ text, responseMessages }) => persistTurn(text, responseMessages as ModelMessage[]),
+      onEnd: ({ text, responseMessages }: { text: string; responseMessages: unknown[] }) =>
+        persistTurn(text, responseMessages as ModelMessage[]),
       // AI SDK skips `onEnd` on abort; keep the steps that did complete.
-      onAbort: ({ steps }) => {
+      onAbort: ({ steps }: { steps: readonly { text: string; response: { messages: unknown[] } }[] }) => {
         const last = steps.at(-1)
         if (!last) return
         return persistTurn(last.text, steps.flatMap((step) => step.response.messages) as ModelMessage[])
       },
-    })
+    }
+    // Playwright runs (MOCK_EXTERNAL_APIS) swap only the model for a scripted
+    // one; route, tools, caps and persistence stay the real ones.
+    const result = mocksExternalApis(c.env)
+      ? streamText({ ...streamOptions, model: createTestChatModel(), stopWhen: isStepCount(MAX_TOOL_CALLS + 1) })
+      : streamDeepSpaceAgent(c.env, {
+          ...streamOptions,
+          profile: 'application',
+          modelId: usedModelId,
+          maxToolCalls: MAX_TOOL_CALLS,
+          effort: 'low',
+        }).result
 
     return createUIMessageStreamResponse({
       headers: {
@@ -378,7 +438,7 @@ export function registerAiChatRoutes(
           // error. Surface the real message so RBAC denials and validation
           // failures are debuggable; log full detail server-side.
           console.error(`[ai-chat] response error: ${loggableError(error)}`)
-          return error instanceof Error ? error.message : String(error)
+          return chatErrorText(error)
         },
       }),
     })

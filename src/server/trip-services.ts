@@ -12,8 +12,15 @@ import type { Trip, TripForecast, DayWeather } from '../types.js'
 import { todayIso } from '../lib/trip-dates.js'
 import type { Env } from '../../worker.js'
 
+/**
+ * Credits per call. Chat is a per-turn estimate, tool steps included: two real
+ * claude-haiku-5-5 turns cost 0.23 credits in all (11-22), so 0.5 leaves room
+ * for longer chats.
+ */
 export const PAID_COSTS = {
   geocode: 0.2,
+  chat: 0.5,
+  places: 3.25,
 } as const
 
 export type PaidKind = keyof typeof PAID_COSTS
@@ -21,6 +28,10 @@ export type PaidKind = keyof typeof PAID_COSTS
 export const DAILY_CAPS = {
   /** Per-user geocoding calls per UTC day. */
   geocode: 10,
+  /** Per-user AI chat turns per UTC day. */
+  chat: 15,
+  /** Per-user uncached place searches per UTC day. */
+  places: 8,
   /** Per-user trips created per UTC day (free, but keeps the room tidy). */
   trip: 20,
   /** App-wide owner-billed credits per UTC day, across every paid kind. */
@@ -34,6 +45,11 @@ export function mocksExternalApis(env: Env): boolean {
 /** Mocked runs spend nothing and reuse one local room all day, so caps stretch. */
 function capFor(env: Env, cap: number): number {
   return mocksExternalApis(env) ? cap * 100 : cap
+}
+
+/** Mocked runs count under their own day key, so tests never use up a local dev server's real caps. */
+function usageDay(env: Env): string {
+  return mocksExternalApis(env) ? `test-${todayIso()}` : todayIso()
 }
 
 export async function isTripMember(tools: ActionTools, tripId: string, userId: string): Promise<boolean> {
@@ -98,7 +114,7 @@ async function overAppCeiling(tools: ActionTools, day: string, cap: number) {
 
 /** Counts one free, capped action (like creating a trip). False when the cap is reached. */
 export async function takeFreeQuota(env: Env, tools: ActionTools, userId: string, kind: 'trip'): Promise<boolean> {
-  const day = todayIso()
+  const day = usageDay(env)
   const cap = capFor(env, DAILY_CAPS[kind])
   const refusal = await claimUsage(tools, { userId, day, kind, count: 1, credits: 0 }, async () =>
     (await overUserCap(tools, userId, day, kind, cap)) ? 'cap' : null,
@@ -117,7 +133,7 @@ export async function reservePaidCall(
   userId: string,
   kind: PaidKind,
 ): Promise<{ ok: true } | { ok: false; reason: 'user_cap' | 'app_cap' }> {
-  const day = todayIso()
+  const day = usageDay(env)
   const refusal = await claimUsage(tools, { userId, day, kind, count: 1, credits: PAID_COSTS[kind] }, async () => {
     const [userOver, appOver] = await Promise.all([
       overUserCap(tools, userId, day, kind, capFor(env, DAILY_CAPS[kind])),

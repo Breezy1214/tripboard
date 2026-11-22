@@ -1,112 +1,184 @@
 /**
- * AI Tool Definitions — converts DeepSpace BUILT_IN_TOOLS to Vercel AI SDK tools.
+ * Co-planner tools, shared by the in-app chat and local agents
+ * (`npx deepspace agent tools tripboard-app`).
  *
- * The assistant can read AND modify data. Per-collection RBAC at the DO
- * layer is the actual security boundary — the user's role determines what
- * each tool call is allowed to do, regardless of what's in this allowlist.
- * Trim entries below if you want a stricter assistant for your app.
+ * Built-in record tools are read-only here. Every board write goes through a
+ * validated tool that runs the same membership-checked services as the
+ * board's server actions (src/server/board-services.ts), so the assistant can
+ * never do more than the user it acts for. Paid calls (place search) are
+ * reserved against the caller's daily cap and the app-wide ceiling first.
  */
 
 import { jsonSchema, tool } from 'ai'
 import type { ToolSet } from 'ai'
 import { z } from 'zod/v4'
-import { BUILT_IN_TOOLS, applyAiToolDefaults } from 'deepspace/worker'
-import type { ToolSchema, CollectionSchema } from 'deepspace/worker'
+import { AgentToolError, BUILT_IN_TOOLS, applyAiToolDefaults } from 'deepspace/worker'
+import type { ActionTools, AgentToolContext, ToolSchema } from 'deepspace/worker'
+import type { Env } from '../../worker.js'
+import type { Stop, Trip } from '../types.js'
+import { tripDays } from '../lib/trip-dates.js'
+import { weatherLabel } from '../lib/weather-codes.js'
+import { createActionTools } from '../server/action-routes.js'
+import {
+  addStopFor,
+  MAX_STOPS_PER_TRIP,
+  memberTrip,
+  moveStopFor,
+  refreshTripForecast,
+  removeStopFor,
+  type ServiceCode,
+  type ServiceResult,
+} from '../server/board-services.js'
+import { searchPlaces } from '../server/places.js'
+import { CHAT_MESSAGES } from './errors.js'
 
 type ToolExecutor = (toolName: string, params: Record<string, unknown>) => Promise<unknown>
 
-const ALLOWED_TOOL_NAMES = [
-  'schema.list',
-  'schema.describe',
-  'records.query',
-  'records.get',
-  'records.create',
-  'records.update',
-  'records.delete',
-  'user.current',
-]
+/** Reads only. Writes go through add_stop, move_stop and remove_stop below. */
+export const ALLOWED_TOOL_NAMES = ['schema.list', 'schema.describe', 'records.query', 'records.get', 'user.current']
 
-// ============================================================================
-// System prompt
-// ============================================================================
+export const CUSTOM_TOOL_NAMES = ['get_trip', 'search_places', 'get_forecast', 'add_stop', 'move_stop', 'remove_stop'] as const
 
-type Interpretation = CollectionSchema['columns'][number]['interpretation']
+const STATUS: Record<ServiceCode, number> = { invalid: 400, not_member: 403, not_found: 404, limit: 409, failed: 502 }
 
-/**
- * Interpretation is `string | Record<string, unknown>`. When it's an object
- * the convention across the SDK's schemas is `{ kind: string, ... }`.
- * Narrow safely to a human-readable name.
- */
-function interpretationLabel(interpretation: Interpretation): string {
-  if (typeof interpretation === 'string') return interpretation
-  const kind = interpretation.kind
-  return typeof kind === 'string' ? kind : 'object'
+function unwrap<T>(result: ServiceResult<T>): T {
+  if (!result.success) throw new AgentToolError(result.code, result.error, STATUS[result.code])
+  return result.data
 }
 
-export function buildSystemPrompt(appName: string, schemas: CollectionSchema[]): string {
-  const schemaSummary = schemas
-    .map((s) => {
-      const cols = (s.columns ?? [])
-        .map((c) => `${c.name}:${interpretationLabel(c.interpretation)}${c.required ? '!' : ''}`)
-        .join(', ')
-      return `- ${s.name}${cols ? ` (${cols})` : ''}`
-    })
-    .join('\n')
+type StopRow = { recordId: string; data: Stop }
 
-  return [
-    `You are the assistant for the "${appName}" app on DeepSpace.`,
-    "You can read and modify the user's data via the available tools. The",
-    "user's own role and permissions still apply at the data layer — your",
-    'tool calls run as the calling user, so you can only do what they could.',
-    '',
-    'Be careful with mutations:',
-    '- Confirm intent before destructive actions (delete, bulk update).',
-    '- Operate only on collections the user explicitly mentioned.',
-    '- After a successful write, briefly confirm what changed.',
-    '- If a write is denied (RBAC), tell the user plainly — do not retry blindly.',
-    '',
-    'Use tools to look up facts before answering. Do not invent data.',
-    'If data is missing, say so plainly. Keep answers concise.',
-    '',
-    'Available collections:',
-    schemaSummary || '(none)',
-  ].join('\n')
+export async function loadTripContext(tools: ActionTools, userId: string, tripId: string) {
+  const trip = unwrap(await memberTrip(tools, tripId, userId))
+  const res = await tools.query<Record<string, unknown>>('stops', { where: { tripId }, limit: MAX_STOPS_PER_TRIP })
+  const stops = (res.success ? (res.data.records as unknown as StopRow[]) : []).sort(
+    (a, b) => a.data.day.localeCompare(b.data.day) || (a.data.position ?? 0) - (b.data.position ?? 0),
+  )
+  return { tripId, trip: trip.data as Trip, stops }
 }
 
-// ============================================================================
-// Tool definitions
-// ============================================================================
+function summarizeStop(stop: StopRow) {
+  const { day, position, title, time, notes, placeName, address, rating, source } = stop.data
+  return { stopId: stop.recordId, day, position, title, time: time || undefined, notes: notes || undefined, placeName, address, rating, source }
+}
 
-export function buildTools(executor: ToolExecutor): ToolSet {
+const tripIdField = z.string().min(1).max(100).describe('Trip id, like trip_... (from the trip page URL /trips/<id>)')
+const dayField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Day of the trip, YYYY-MM-DD, inside the trip dates')
+const stopIdField = z.string().min(1).max(100).describe('Stop id from get_trip')
+
+export function buildTools(executor: ToolExecutor, context: AgentToolContext<Env>): ToolSet {
   const tools: ToolSet = {}
 
   for (const def of BUILT_IN_TOOLS) {
     if (!ALLOWED_TOOL_NAMES.includes(def.name)) continue
-    const safeName = def.name.replace('.', '_')
-    tools[safeName] = tool({
+    tools[def.name.replace('.', '_')] = tool({
       description: def.description,
       inputSchema: buildInputSchema(def),
-      // Apply assistant-only param defaults (e.g. records.query page size) here
-      // in the AI tool layer, so internal record readers that hit the tools
-      // dispatch directly stay unbounded.
-      execute: async (params: Record<string, unknown>) =>
-        executor(def.name, applyAiToolDefaults(def.name, params)),
+      execute: async (params: Record<string, unknown>) => executor(def.name, applyAiToolDefaults(def.name, params)),
     })
   }
+
+  const { env, userId } = context
+  const actionTools = createActionTools(env, userId, '')
+
+  tools.get_trip = tool({
+    description: 'Read one trip you are a member of: name, destination, dates, its days and every stop with its id.',
+    inputSchema: z.object({ tripId: tripIdField }),
+    execute: async ({ tripId }) => {
+      const { trip, stops } = await loadTripContext(actionTools, userId, tripId)
+      return {
+        tripId,
+        name: trip.name,
+        destination: trip.placeLabel || trip.destination,
+        startDate: trip.startDate,
+        endDate: trip.endDate,
+        days: tripDays(trip.startDate, trip.endDate),
+        stops: stops.map(summarizeStop),
+      }
+    },
+  })
+
+  tools.search_places = tool({
+    description:
+      'Search real places (Google Maps via SerpApi) near the trip destination: restaurants, sights, cafes. ' +
+      'Returns name, address, rating and coordinates. Costs credits, so search once per request; repeated queries are cached.',
+    inputSchema: z.object({ tripId: tripIdField, query: z.string().min(2).max(120).describe('What to look for, e.g. "pastel de nata near Belem"') }),
+    execute: async ({ tripId, query }) => {
+      const trip = unwrap(await memberTrip(actionTools, tripId, userId)).data
+      const result = await searchPlaces(env, actionTools, userId, {
+        tripId,
+        query,
+        destination: trip.placeLabel || trip.destination,
+        lat: trip.lat,
+        lon: trip.lon,
+      })
+      if (result.ok) return { query, cached: result.cached, places: result.places }
+      const refusals = {
+        user_cap: ['places_user_cap', 'You have used your place searches for today. They reset at midnight UTC.', 429],
+        app_cap: ['places_app_cap', CHAT_MESSAGES.appCap, 429],
+        out_of_credits: ['insufficient_credits', CHAT_MESSAGES.outOfCredits, 402],
+        unavailable: ['places_unavailable', 'Place search is unavailable right now. Suggest places from general knowledge and say so.', 503],
+      } as const
+      const [code, message, status] = refusals[result.reason]
+      throw new AgentToolError(code, message, status)
+    },
+  })
+
+  tools.get_forecast = tool({
+    description: 'Daily weather for each day of the trip (Open-Meteo, about 16 days ahead). Days outside the window have no forecast.',
+    inputSchema: z.object({ tripId: tripIdField }),
+    execute: async ({ tripId }) => {
+      const trip = unwrap(await memberTrip(actionTools, tripId, userId)).data
+      const { status, forecast } = unwrap(await refreshTripForecast(env, actionTools, userId, tripId))
+      const known = forecast ?? trip.forecast
+      return {
+        status,
+        days: tripDays(trip.startDate, trip.endDate).map((day) => {
+          const w = known?.days?.[day]
+          return w
+            ? { day, summary: weatherLabel(w.code), maxC: w.max, minC: w.min, rainChance: w.precip }
+            : { day, summary: 'No forecast yet' }
+        }),
+      }
+    },
+  })
+
+  tools.add_stop = tool({
+    description: 'Add a stop to one day of the trip. Everyone on the trip sees it live, marked as added by AI.',
+    inputSchema: z.object({
+      tripId: tripIdField,
+      day: dayField,
+      title: z.string().min(1).max(120),
+      time: z.string().regex(/^\d{2}:\d{2}$/).optional().describe('24h time, HH:MM'),
+      notes: z.string().max(1000).optional(),
+      placeName: z.string().max(160).optional(),
+      address: z.string().max(240).optional(),
+      lat: z.number().optional(),
+      lon: z.number().optional(),
+      rating: z.number().optional(),
+    }),
+    execute: async (input) => unwrap(await addStopFor(actionTools, userId, { ...input, source: 'ai' })),
+  })
+
+  tools.move_stop = tool({
+    description: 'Move a stop to another day of the trip, or reorder it within its day. Position is 1-based; omit it to put the stop last.',
+    inputSchema: z.object({ tripId: tripIdField, stopId: stopIdField, day: dayField, position: z.number().int().min(1).optional() }),
+    execute: async (input) => unwrap(await moveStopFor(actionTools, userId, input)),
+  })
+
+  tools.remove_stop = tool({
+    description: 'Remove one stop from the trip for everyone. Confirm with the user before removing more than one.',
+    inputSchema: z.object({ tripId: tripIdField, stopId: stopIdField }),
+    execute: async (input) => unwrap(await removeStopFor(actionTools, userId, input)),
+  })
 
   return tools
 }
 
-// ============================================================================
-// Convert ToolSchema params → Zod validator + derived provider JSON Schema
-// ============================================================================
-
 /**
- * The Zod validator is the single source; the provider-facing JSON Schema is
- * derived from it with Zod's native conversion, which keeps z.record()
- * objects open (`additionalProperties: {}`). The AI SDK's own Zod conversion
- * closes every object, which would incorrectly advertise the free-form
- * `data` and `where` objects as empty — so the conversion happens here.
+ * Built-in tools describe params as a flat ToolSchema. The Zod validator is
+ * the single source; the provider-facing JSON Schema is derived with Zod's
+ * own conversion, which keeps z.record() objects open (`where` filters).
  */
 function buildInputSchema(def: ToolSchema) {
   const shape: Record<string, z.ZodTypeAny> = {}
@@ -136,15 +208,10 @@ function buildInputSchema(def: ToolSchema) {
   }
 
   const validator = z.object(shape)
-  return jsonSchema<Record<string, unknown>>(
-    z.toJSONSchema(validator) as Parameters<typeof jsonSchema>[0],
-    {
-      validate: async (value) => {
-        const result = await validator.safeParseAsync(value)
-        return result.success
-          ? { success: true, value: result.data }
-          : { success: false, error: result.error }
-      },
+  return jsonSchema<Record<string, unknown>>(z.toJSONSchema(validator) as Parameters<typeof jsonSchema>[0], {
+    validate: async (value) => {
+      const result = await validator.safeParseAsync(value)
+      return result.success ? { success: true, value: result.data } : { success: false, error: result.error }
     },
-  )
+  })
 }

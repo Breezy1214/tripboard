@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { Page } from '@playwright/test'
 
 export interface Json {
@@ -39,12 +41,72 @@ export function action(page: Page, name: string, params: Record<string, unknown>
 }
 
 /**
- * Calls a built-in record tool through the app's browser agent route. It runs
- * as the caller with RBAC on, the same checks the RecordRoom applies to
- * WebSocket writes.
+ * Calls an app tool (a read-only record tool or a co-planner tool) through the
+ * browser agent route, as the caller. The same tools serve the in-app chat and
+ * local agents.
  */
-export function recordTool(page: Page, name: string, input: Record<string, unknown>): Promise<Json> {
+export function agentTool(page: Page, name: string, input: Record<string, unknown>): Promise<Json> {
   return post(page, `/_deepspace/agent/browser/tools/${name}`, { input })
+}
+
+/** Tool names the browser agent route lists for the signed-in user. */
+export function agentToolNames(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const tokenRes = await fetch('/api/auth/token', { method: 'POST', credentials: 'include' })
+    const { token } = (await tokenRes.json()) as { token?: string }
+    const res = await fetch('/_deepspace/agent/browser/tools', { headers: { Authorization: `Bearer ${token}` } })
+    const body = (await res.json()) as { tools?: { name: string }[] }
+    return (body.tools ?? []).map((t) => t.name)
+  })
+}
+
+const APP_ID = /DEEPSPACE_APP_ID\s*=\s*"([^"]+)"/.exec(
+  readFileSync(fileURLToPath(new URL('../../wrangler.toml', import.meta.url)), 'utf8'),
+)?.[1]
+
+export type RecordWrite =
+  | { op: 'put'; collection: string; recordId?: string; data: Record<string, unknown> }
+  | { op: 'delete'; collection: string; recordId: string }
+
+/**
+ * Sends one write over the records WebSocket as the page's user, exactly as
+ * useMutations does, and returns the room's ack. RBAC runs in the RecordRoom.
+ */
+export function recordSocketWrite(page: Page, write: RecordWrite): Promise<{ success: boolean; error?: string }> {
+  return page.evaluate(
+    async ({ write, appId }) => {
+      const tokenRes = await fetch('/api/auth/token', { method: 'POST', credentials: 'include' })
+      const { token } = (await tokenRes.json()) as { token?: string }
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+      const ws = new WebSocket(`${proto}://${location.host}/ws/app:${appId}?token=${token}`)
+      const requestId = `test-${crypto.randomUUID()}`
+      return new Promise<{ success: boolean; error?: string }>((resolve) => {
+        const done = (result: { success: boolean; error?: string }) => {
+          clearTimeout(timer)
+          ws.close()
+          resolve(result)
+        }
+        const timer = setTimeout(() => done({ success: false, error: 'timeout' }), 10_000)
+        ws.onopen = () => {
+          const payload =
+            write.op === 'put'
+              ? { collection: write.collection, recordId: write.recordId ?? `rec_${crypto.randomUUID()}`, data: write.data, requestId }
+              : { collection: write.collection, recordId: write.recordId, requestId }
+          ws.send(JSON.stringify({ type: write.op === 'put' ? 'core.put' : 'core.delete', payload }))
+        }
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(String(event.data)) as { type: string; payload?: { requestId?: string; success?: boolean; error?: string } }
+          if (msg.type === 'records.ack' && msg.payload?.requestId === requestId) {
+            done({ success: !!msg.payload.success, error: msg.payload.error })
+          } else if (msg.type === 'core.error' && !msg.payload?.requestId) {
+            done({ success: false, error: msg.payload?.error })
+          }
+        }
+        ws.onerror = () => done({ success: false, error: 'socket error' })
+      })
+    },
+    { write, appId: APP_ID },
+  )
 }
 
 export async function createTrip(

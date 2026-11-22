@@ -1,5 +1,6 @@
 import { useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
-import { ArrowDown, ArrowUp, Clock, Pencil, Trash2 } from 'lucide-react'
+import { useUserLookup } from 'deepspace'
+import { ArrowDown, ArrowUp, Clock, MapPin, Pencil, Sparkles, Star, Trash2 } from 'lucide-react'
 import { Button, ConfirmModal, Input, Label, Textarea, useToast } from '@/components/ui'
 import { formatDay } from '../../lib/trip-dates'
 import type { Stop } from '../../types'
@@ -20,7 +21,8 @@ export function StopCard({ stop, days, canWrite, isFirst, isLast, onMove, onSave
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
-  const { title, time, notes } = stop.data
+  const { getName } = useUserLookup()
+  const { title, time, notes, source, addedBy, address, rating } = stop.data
 
   async function run(task: () => Promise<void>, failure: string) {
     setBusy(true)
@@ -65,6 +67,25 @@ export function StopCard({ stop, days, canWrite, isFirst, isLast, onMove, onSave
             {title}
           </p>
           {notes && <p className="mt-1 whitespace-pre-line break-words text-xs text-muted-foreground">{notes}</p>}
+          {(address || typeof rating === 'number') && (
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+              {address && (
+                <span className="inline-flex items-center gap-1">
+                  <MapPin aria-hidden className="size-3" /> {address}
+                </span>
+              )}
+              {typeof rating === 'number' && (
+                <span className="inline-flex items-center gap-1">
+                  <Star aria-hidden className="size-3" /> {rating.toFixed(1)}
+                </span>
+              )}
+            </p>
+          )}
+          {source === 'ai' && (
+            <p data-testid="stop-ai-badge" className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+              <Sparkles aria-hidden className="size-3" /> Added by AI for {(addedBy && getName(addedBy)) || 'a trip member'}
+            </p>
+          )}
         </div>
       </div>
       <div className="mt-2 flex items-center justify-end gap-0.5">

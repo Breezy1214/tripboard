@@ -7,7 +7,7 @@
  * Open-Meteo forecast return canned data (see src/server/trip-services.ts).
  */
 import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
-import { action, createTrip, deleteTrip, isoInDays, presenceAccepted, recordTool, testName } from './helpers/trip'
+import { action, agentTool, createTrip, deleteTrip, isoInDays, presenceAccepted, recordSocketWrite, testName } from './helpers/trip'
 
 const usableTestAccounts = loadAllTestAccounts().length
 test.skip(usableTestAccounts < 3, `Needs 3 usable test accounts, found ${usableTestAccounts}.`)
@@ -136,53 +136,65 @@ test('an excluded user cannot read, create, update or delete stops', async ({ us
     await expect(casey.page.getByTestId('trip-not-found')).toBeVisible({ timeout: 20_000 })
     await expect(casey.page.getByText('Secret stop')).toHaveCount(0)
 
-    const read = await recordTool(casey.page, 'records_query', { collection: 'stops', where: { tripId } })
+    const read = await agentTool(casey.page, 'records_query', { collection: 'stops', where: { tripId } })
     expect(read.status).toBe(200)
     expect(read.body).toMatchObject({ ok: true, result: { success: true, data: { records: [], count: 0 } } })
-    const get = await recordTool(casey.page, 'records_get', { collection: 'stops', recordId: stopId })
+    const get = await agentTool(casey.page, 'records_get', { collection: 'stops', recordId: stopId })
     expect(get.body.error).toContain('READ DENIED')
-    const tripRead = await recordTool(casey.page, 'records_query', { collection: 'trips', where: { teamId: tripId } })
+    const tripRead = await agentTool(casey.page, 'records_query', { collection: 'trips', where: { teamId: tripId } })
     expect(JSON.stringify(tripRead.body)).not.toContain('Private trip')
 
-    const update = await recordTool(casey.page, 'records_update', {
-      collection: 'stops',
-      recordId: stopId,
-      data: { title: 'Hijacked' },
-    })
-    expect(update.body.error).toContain('UPDATE DENIED')
-    const del = await recordTool(casey.page, 'records_delete', { collection: 'stops', recordId: stopId })
-    expect(del.body.error).toContain('DELETE DENIED')
-    const create = await recordTool(casey.page, 'records_create', {
+    // Direct writes go over the records WebSocket, the same path useMutations uses.
+    const update = await recordSocketWrite(casey.page, { op: 'put', collection: 'stops', recordId: stopId, data: { title: 'Hijacked' } })
+    expect(update).toMatchObject({ success: false })
+    expect(update.error).toContain('UPDATE DENIED')
+    const del = await recordSocketWrite(casey.page, { op: 'delete', collection: 'stops', recordId: stopId })
+    expect(del).toMatchObject({ success: false })
+    expect(del.error).toContain('DELETE DENIED')
+    const create = await recordSocketWrite(casey.page, {
+      op: 'put',
       collection: 'stops',
       data: { tripId, day: isoInDays(2), title: 'Injected stop', position: 1 },
     })
-    expect(create.body.error).toContain('CREATE DENIED')
+    expect(create).toMatchObject({ success: false })
+    expect(create.error).toContain('CREATE DENIED')
+    // The co-planner's write tools refuse a non-member the same way.
+    const aiAdd = await agentTool(casey.page, 'add_stop', { tripId, day: isoInDays(2), title: 'Injected by AI' })
+    expect(aiAdd).toMatchObject({ status: 403, body: { ok: false, error: 'You are not a member of this trip' } })
+    // Built-in record writes are not offered as tools at all.
+    expect((await agentTool(casey.page, 'records_create', { collection: 'stops', data: {} })).status).toBe(404)
     const viaAction = await action(casey.page, 'addStop', { tripId, day: isoInDays(2), title: 'Injected stop' })
     expect(viaAction.body).toMatchObject({ success: false, error: 'You are not a member of this trip' })
     const inviteAttempt = await action(casey.page, 'createInvite', { tripId })
     expect(inviteAttempt.body.success).toBe(false)
     expect(await presenceAccepted(casey.page, tripId)).toBe(false)
 
-    const selfAdd = await recordTool(casey.page, 'records_create', {
+    const selfAdd = await recordSocketWrite(casey.page, {
+      op: 'put',
       collection: 'team_members',
       data: { teamId: tripId, userId: casey.userId ?? 'casey', status: 'active', role: 'member' },
     })
-    expect(selfAdd.body.error).toContain('CREATE DENIED')
+    expect(selfAdd).toMatchObject({ success: false })
+    expect(selfAdd.error).toContain('CREATE DENIED')
 
     // Members go through addStop too: 'team' cannot gate create, so create is closed for everyone.
-    const memberCreate = await recordTool(alex.page, 'records_create', {
+    const memberCreate = await recordSocketWrite(alex.page, {
+      op: 'put',
       collection: 'stops',
       data: { tripId, day: isoInDays(2), title: 'Direct write', position: 9 },
     })
-    expect(memberCreate.body.error).toContain('CREATE DENIED')
-    const moveTrip = await recordTool(alex.page, 'records_update', {
+    expect(memberCreate).toMatchObject({ success: false })
+    expect(memberCreate.error).toContain('CREATE DENIED')
+    const moveTrip = await recordSocketWrite(alex.page, {
+      op: 'put',
       collection: 'stops',
       recordId: stopId,
       data: { tripId: 'trip_someone_else' },
     })
-    expect(moveTrip.body.error).toContain("Cannot modify immutable field 'tripId'")
+    expect(moveTrip).toMatchObject({ success: false })
+    expect(moveTrip.error).toContain("Cannot modify immutable field 'tripId'")
     expect((await action(alex.page, 'createInvite', { tripId })).body.success).toBe(true)
-    const invites = await recordTool(alex.page, 'records_query', { collection: 'trip_invites', where: { tripId } })
+    const invites = await agentTool(alex.page, 'records_query', { collection: 'trip_invites', where: { tripId } })
     expect(invites.body).toMatchObject({ result: { data: { records: [], count: 0 } } })
     expect(await presenceAccepted(alex.page, tripId)).toBe(true)
 
