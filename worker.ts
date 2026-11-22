@@ -47,6 +47,9 @@ export const __DO_MANIFEST__ = [
 export class AppRecordRoom extends RecordRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, schemas, { ownerUserId: env.OWNER_USER_ID })
+    // usage went from one counter row per (userId, day, kind) to one row per call.
+    // The SDK adds uniqueOn indexes but never drops a removed one.
+    this.sql.exec('DROP INDEX IF EXISTS "uniq_c_usage_userId_day_kind"')
   }
 }
 

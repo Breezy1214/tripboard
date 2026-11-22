@@ -27,8 +27,6 @@ export const DAILY_CAPS = {
   appCredits: 40,
 } as const
 
-const APP_USAGE_USER = '__app__'
-
 export function mocksExternalApis(env: Env): boolean {
   return env.MOCK_EXTERNAL_APIS === 'true'
 }
@@ -50,33 +48,62 @@ export async function getTrip(tools: ActionTools, tripId: string) {
   return res.data.record as unknown as { recordId: string; createdBy: string; data: Trip }
 }
 
-function usageId(userId: string, day: string, kind: string): string {
-  return `${kind}_${day}_${userId}`
+type UsageRow = {
+  userId: string
+  day: string
+  kind: string
+  count: number
+  credits: number
 }
 
-async function readUsage(tools: ActionTools, userId: string, day: string, kind: string) {
-  const res = await tools.get<{ count?: number; credits?: number }>('usage', usageId(userId, day, kind))
-  if (!res.success) return { count: 0, credits: 0 }
-  return { count: Number(res.data.record.data.count ?? 0), credits: Number(res.data.record.data.credits ?? 0) }
+async function usageRows(tools: ActionTools, where: Partial<UsageRow>, limit: number) {
+  const res = await tools.query<UsageRow>('usage', { where, limit })
+  return res.success ? res.data.records : null
 }
 
-async function writeUsage(
+/**
+ * Each call inserts its own usage row first and only then counts. Separate
+ * requests to the room can interleave, but the last row in always sees every
+ * earlier one, so a burst can over-refuse and never over-grant. A refused call
+ * removes its row; if that fails it stays counted, which is the safe side.
+ */
+async function claimUsage<R extends string>(
   tools: ActionTools,
-  userId: string,
-  day: string,
-  kind: string,
-  next: { count: number; credits: number },
-) {
-  await tools.create('usage', { userId, day, kind, ...next }, usageId(userId, day, kind))
+  row: UsageRow,
+  check: () => Promise<R | null>,
+): Promise<R | 'error' | null> {
+  const created = await tools.create('usage', row)
+  if (!created.success) return 'error'
+  const refusal = await check()
+  if (refusal) await tools.remove('usage', created.data.recordId)
+  return refusal
+}
+
+async function overUserCap(tools: ActionTools, userId: string, day: string, kind: string, cap: number) {
+  const rows = await usageRows(tools, { userId, day, kind }, cap + 1)
+  return !rows || rows.length > cap
+}
+
+/** Rows past the limit cannot change the answer: the returned ones already exceed the ceiling. */
+async function overAppCeiling(tools: ActionTools, day: string, cap: number) {
+  const perKind = await Promise.all(
+    (Object.keys(PAID_COSTS) as PaidKind[]).map((kind) =>
+      usageRows(tools, { day, kind }, Math.floor(cap / PAID_COSTS[kind]) + 1),
+    ),
+  )
+  if (perKind.some((rows) => !rows)) return true
+  const credits = perKind.flatMap((rows) => rows ?? []).reduce((sum, r) => sum + Number(r.data.credits ?? 0), 0)
+  return Math.round(credits * 100) > Math.round(cap * 100)
 }
 
 /** Counts one free, capped action (like creating a trip). False when the cap is reached. */
 export async function takeFreeQuota(env: Env, tools: ActionTools, userId: string, kind: 'trip'): Promise<boolean> {
   const day = todayIso()
-  const used = await readUsage(tools, userId, day, kind)
-  if (used.count >= capFor(env, DAILY_CAPS[kind])) return false
-  await writeUsage(tools, userId, day, kind, { count: used.count + 1, credits: 0 })
-  return true
+  const cap = capFor(env, DAILY_CAPS[kind])
+  const refusal = await claimUsage(tools, { userId, day, kind, count: 1, credits: 0 }, async () =>
+    (await overUserCap(tools, userId, day, kind, cap)) ? 'cap' : null,
+  )
+  return refusal === null
 }
 
 /**
@@ -91,18 +118,15 @@ export async function reservePaidCall(
   kind: PaidKind,
 ): Promise<{ ok: true } | { ok: false; reason: 'user_cap' | 'app_cap' }> {
   const day = todayIso()
-  const cost = PAID_COSTS[kind]
-  const [mine, app] = await Promise.all([
-    readUsage(tools, userId, day, kind),
-    readUsage(tools, APP_USAGE_USER, day, 'credits'),
-  ])
-  if (mine.count >= capFor(env, DAILY_CAPS[kind])) return { ok: false, reason: 'user_cap' }
-  if (app.credits + cost > capFor(env, DAILY_CAPS.appCredits)) return { ok: false, reason: 'app_cap' }
-  await Promise.all([
-    writeUsage(tools, userId, day, kind, { count: mine.count + 1, credits: mine.credits + cost }),
-    writeUsage(tools, APP_USAGE_USER, day, 'credits', { count: app.count + 1, credits: app.credits + cost }),
-  ])
-  return { ok: true }
+  const refusal = await claimUsage(tools, { userId, day, kind, count: 1, credits: PAID_COSTS[kind] }, async () => {
+    const [userOver, appOver] = await Promise.all([
+      overUserCap(tools, userId, day, kind, capFor(env, DAILY_CAPS[kind])),
+      overAppCeiling(tools, day, capFor(env, DAILY_CAPS.appCredits)),
+    ])
+    return userOver ? 'user_cap' : appOver ? 'app_cap' : null
+  })
+  if (refusal === null) return { ok: true }
+  return { ok: false, reason: refusal === 'user_cap' ? 'user_cap' : 'app_cap' }
 }
 
 export interface GeocodeResult {

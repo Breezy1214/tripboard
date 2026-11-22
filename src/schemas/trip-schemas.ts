@@ -115,7 +115,6 @@ export const usageSchema: CollectionSchema = {
     { name: 'count', storage: 'number', interpretation: 'plain' },
     { name: 'credits', storage: 'number', interpretation: 'plain' },
   ],
-  uniqueOn: ['userId', 'day', 'kind'],
   permissions: adminReadOnly,
 }
 
