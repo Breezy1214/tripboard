@@ -9,7 +9,12 @@ import { prerender } from './prerender.ts'
 
 const appDir = fileURLToPath(new URL('.', import.meta.url))
 
-export default defineConfig({
+// Playwright's webServer sets TRIPBOARD_MOCK_EXTERNAL=1 so the dev worker
+// returns canned geocoding and forecasts. Never applied to `vite build`.
+const mockExternalApis = (command: string) =>
+  command === 'serve' && process.env.TRIPBOARD_MOCK_EXTERNAL === '1'
+
+export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     generouted(),
@@ -20,6 +25,9 @@ export default defineConfig({
     // the generated app and keep local dev/test startup deterministic.
     cloudflare({
       inspectorPort: false,
+      ...(mockExternalApis(command)
+        ? { config: (config) => ({ vars: { ...config.vars, MOCK_EXTERNAL_APIS: 'true' } }) }
+        : {}),
     }),
     // The app id `define`, the preview-secret cleanup, and the client dedupe
     // hint — all shipped by the SDK so a fix to any of them arrives with a
@@ -64,4 +72,4 @@ export default defineConfig({
     // Dev-only; `vite build` ignores optimizeDeps.
     entries: ['./index.html', './src/pages/**/*.tsx'],
   },
-})
+}))

@@ -26,5 +26,6 @@ export const integrations: Record<
 > = {
   google: { billing: 'user' },
   composio: { billing: 'user' },
-  // openai: { billing: 'developer', anonymous: true },
+  // Owner-billed, called only from server actions behind daily caps.
+  openweathermap: { billing: 'developer' },
 }

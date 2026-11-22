@@ -63,6 +63,18 @@ test.describe('Smoke tests', () => {
     await expect(page.getByTestId('nav-user-name')).toHaveCount(0)
   })
 
+  test('signed-out visitor on /home is asked to sign in', async ({ page }) => {
+    await page.goto('/home')
+    await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('trips-empty')).toHaveCount(0)
+  })
+
+  test('signed-out invite link asks to sign in and remembers the code', async ({ page }) => {
+    await page.goto('/join/abcdefghjk')
+    await expect(page.getByRole('button', { name: 'Sign in to join' })).toBeVisible({ timeout: 15000 })
+    expect(await page.evaluate(() => localStorage.getItem('tripboard:pending-invite'))).toBe('abcdefghjk')
+  })
+
   test('unknown route shows 404', async ({ page }) => {
     await page.goto('/nonexistent-page-xyz')
     await waitForApp(page)

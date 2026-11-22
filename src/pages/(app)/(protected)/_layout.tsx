@@ -34,7 +34,7 @@ function SignedOutPanel() {
       <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 text-center">
         <h1 className="text-lg font-semibold text-foreground">Sign in to continue</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          This page is only available to signed-in users.
+          Sign in with Google to see your trips and join the ones you are invited to.
         </p>
         <Button className="mt-6 w-full" onClick={() => setShowAuthModal(true)}>
           Sign in

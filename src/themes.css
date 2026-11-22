@@ -44,3 +44,32 @@
   --color-shell: #fafafa;
   --color-shell-panel: #ffffff;
 }
+
+/* Atlas — Tripboard's theme: warm paper, deep teal accent. */
+[data-theme="atlas"] {
+  color-scheme: light;
+  --color-background: #f7f5f0;
+  --color-foreground: #1c1a17;
+  --color-card: #ffffff;
+  --color-card-foreground: #1c1a17;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1c1a17;
+  --color-primary: #0f6e66;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #ece8df;
+  --color-secondary-foreground: #1c1a17;
+  --color-muted: #ece8df;
+  --color-muted-foreground: #6b655b;
+  --color-accent: #e6efe9;
+  --color-accent-foreground: #1c1a17;
+  --color-destructive: #c2410c;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e2ddd2;
+  --color-input: #d8d2c5;
+  --color-ring: #0f6e66;
+  --radius: 0.625rem;
+  --shadow-card: 0 1px 2px 0 rgba(28, 26, 23, 0.05);
+  --shadow-card-hover: 0 4px 14px 0 rgba(28, 26, 23, 0.08);
+  --color-shell: #f7f5f0;
+  --color-shell-panel: #ffffff;
+}

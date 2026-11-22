@@ -118,6 +118,12 @@ export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    * an authenticated app owner/admin. deepspace dev/test set it locally.
    */
   ALLOW_DEBUG_ROUTES?: string
+  /**
+   * "true" only in Playwright runs (vite.config.ts sets it for `vite serve`
+   * when TRIPBOARD_MOCK_EXTERNAL=1). Paid integrations and Open-Meteo then
+   * return canned data so no test spends credits.
+   */
+  MOCK_EXTERNAL_APIS?: string
 }
 
 export type AppContext = { Bindings: Env }

@@ -17,7 +17,6 @@ import { createUIMessageStreamResponse, toUIMessageStream, type ModelMessage } f
 import {
   deepSpaceAgentErrorSummary,
   prepareMessagesWithCompaction,
-  listDeepSpaceAgentModels,
   resolveDeepSpaceAgentModel,
   streamDeepSpaceAgent,
   turnsToCoreMessages,
@@ -51,6 +50,8 @@ function recordRoomStub(env: Env): DurableObjectStub {
   // by APP_NAME would read/write a room the browser never subscribes to.
   return env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
 }
+
+const CHAT_MODEL_ID = 'claude-haiku-5-5'
 
 // Cap on user-supplied content length. Far above any realistic message;
 // blocks accidental DoS via megabyte payloads.
@@ -147,15 +148,10 @@ export function registerAiChatRoutes(
     if (access instanceof Response) return access
     const { auth } = access
 
-    const authHeader = c.req.header('Authorization') ?? ''
-    const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-    if (!jwt) return c.json({ error: 'Unauthorized' }, 401)
-
-    const { chatId, userMessageId, content, modelId } = await c.req.json<{
+    const { chatId, userMessageId, content } = await c.req.json<{
       chatId?: string
       userMessageId?: string
       content?: string
-      modelId?: string
     }>()
     if (typeof chatId !== 'string' || !chatId) return c.json({ error: 'chatId is required' }, 400)
     if (typeof userMessageId !== 'string' || !userMessageId)
@@ -165,19 +161,9 @@ export function registerAiChatRoutes(
     if (content.length > MAX_USER_CONTENT_LENGTH) {
       return c.json({ error: `content exceeds ${MAX_USER_CONTENT_LENGTH} chars` }, 413)
     }
-    const selectedModel = resolveDeepSpaceAgentModel(modelId, 'application')
-    if (!selectedModel) {
-      // Name the valid ids: the caller has no other way to learn them here.
-      const modelIds = listDeepSpaceAgentModels('application').map((model) => model.id)
-      return c.json(
-        {
-          error: `Unknown modelId: ${modelId}. Valid: ${modelIds.join(', ')}`,
-          code: 'unknown_model',
-          modelIds,
-        },
-        400,
-      )
-    }
+    // Owner-billed, so the server picks the model; a client modelId is ignored.
+    const selectedModel = resolveDeepSpaceAgentModel(CHAT_MODEL_ID, 'application')
+    if (!selectedModel) return c.json({ error: 'Chat model unavailable' }, 503)
 
     const stub = recordRoomStub(c.env)
     const chat = await getChat(stub, chatId, auth.userId)
@@ -220,8 +206,8 @@ export function registerAiChatRoutes(
         ? { text: chat.compactedSummary, throughId: chat.compactedThroughId }
         : undefined
 
-    // User-billed: compaction is part of the user's chat experience, not infra.
-    const summarizer = makeDefaultSummarizer(c.env, { authToken: jwt })
+    // Owner-billed like the chat turn itself, so users never pay.
+    const summarizer = makeDefaultSummarizer(c.env)
     const { messages: prepared, newSummary } = await prepareMessagesWithCompaction(
       turns,
       DEFAULT_CONTEXT_CONFIG,
@@ -351,7 +337,6 @@ export function registerAiChatRoutes(
     const { result } = streamDeepSpaceAgent(c.env, {
       profile: 'application',
       modelId: usedModelId,
-      authToken: jwt,
       instructions: systemText,
       messages,
       tools,

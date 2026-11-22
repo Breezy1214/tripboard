@@ -1,6 +1,9 @@
 /** App name — replaced by the CLI during scaffolding */
 export const APP_NAME = 'tripboard-app'
 
+/** Product name shown in the UI. */
+export const PRODUCT_NAME = 'Tripboard'
+
 /** Immutable app identity — data scope keys to this, so renames never
  *  strand your records.
  *

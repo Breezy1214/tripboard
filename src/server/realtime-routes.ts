@@ -11,6 +11,8 @@ import type { Context, Hono } from 'hono'
 import { authenticatedRoomRequest, resolveAppRole, verifyJwt } from 'deepspace/worker'
 import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
 import type { AppContext, Env } from '../../worker.js'
+import { createActionTools } from './action-routes.js'
+import { isTripMember } from './trip-services.js'
 
 function jwtConfig(env: Env): JwtVerifierConfig {
   return { publicKey: env.AUTH_JWT_PUBLIC_KEY, issuer: env.AUTH_JWT_ISSUER }
@@ -150,10 +152,21 @@ export function registerRealtimeRoutes(app: Hono<AppContext>): void {
     ),
   )
 
-  app.get(
-    '/ws/presence/:scopeId',
-    wsRoute((env) => env.PRESENCE_ROOMS),
-  )
+  // Trip presence carries names and emails, so only trip members may join.
+  const presenceRoute = wsRoute((env) => env.PRESENCE_ROOMS)
+  app.get('/ws/presence/:scopeId', async (c) => {
+    const scopeId = c.req.param('scopeId')
+    if (scopeId.startsWith('trip:')) {
+      const token = new URL(c.req.url).searchParams.get('token')
+      const auth = token ? (await verifyJwt(jwtConfig(c.env), token)).result : null
+      if (!auth) return new Response('Unauthorized', { status: 401 })
+      const tools = createActionTools(c.env, auth.userId, '')
+      if (!(await isTripMember(tools, scopeId.slice('trip:'.length), auth.userId))) {
+        return new Response('Forbidden', { status: 403 })
+      }
+    }
+    return presenceRoute(c)
+  })
 
   app.get(
     '/ws/cron/:roomId',
