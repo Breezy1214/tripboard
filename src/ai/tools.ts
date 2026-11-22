@@ -29,7 +29,7 @@ import {
   type ServiceCode,
   type ServiceResult,
 } from '../server/board-services.js'
-import { searchPlaces } from '../server/places.js'
+import { OSM_ATTRIBUTION, searchPlaces } from '../server/places.js'
 import { CHAT_MESSAGES } from './errors.js'
 
 type ToolExecutor = (toolName: string, params: Record<string, unknown>) => Promise<unknown>
@@ -38,6 +38,9 @@ type ToolExecutor = (toolName: string, params: Record<string, unknown>) => Promi
 export const ALLOWED_TOOL_NAMES = ['schema.list', 'schema.describe', 'records.query', 'records.get', 'user.current']
 
 export const CUSTOM_TOOL_NAMES = ['get_trip', 'search_places', 'get_forecast', 'add_stop', 'move_stop', 'remove_stop'] as const
+
+/** New (uncached) place searches allowed per chat turn or agent request; repeats come from the cache. */
+export const UNCACHED_SEARCHES_PER_REQUEST = 1
 
 const STATUS: Record<ServiceCode, number> = { invalid: 400, not_member: 403, not_found: 404, limit: 409, failed: 502 }
 
@@ -98,25 +101,39 @@ export function buildTools(executor: ToolExecutor, context: AgentToolContext<Env
     },
   })
 
+  // buildTools runs once per chat turn and per agent request, so this budget is per request.
+  let uncachedSearchesLeft = UNCACHED_SEARCHES_PER_REQUEST
+  const takeUncachedSearch = () => uncachedSearchesLeft-- > 0
+
   tools.search_places = tool({
     description:
-      'Search real places (Google Maps via SerpApi) near the trip destination: restaurants, sights, cafes. ' +
-      'Returns name, address, rating and coordinates. Costs credits, so search once per request; repeated queries are cached.',
-    inputSchema: z.object({ tripId: tripIdField, query: z.string().min(2).max(120).describe('What to look for, e.g. "pastel de nata near Belem"') }),
+      'Search real places near the trip destination: restaurants, sights, cafes. Google Maps (SerpApi) first, ' +
+      'OpenStreetMap when that is unavailable; `source` says which answered. Returns name, address, rating (Google only) ' +
+      'and coordinates. One new search per message, so make it count: a short category or name works best ' +
+      '(e.g. "bakery", "museum"). Repeated queries are cached.',
+    inputSchema: z.object({ tripId: tripIdField, query: z.string().min(2).max(120).describe('What to look for, e.g. "bakery" or "Belem Tower"') }),
     execute: async ({ tripId, query }) => {
       const trip = unwrap(await memberTrip(actionTools, tripId, userId)).data
-      const result = await searchPlaces(env, actionTools, userId, {
-        tripId,
-        query,
-        destination: trip.placeLabel || trip.destination,
-        lat: trip.lat,
-        lon: trip.lon,
-      })
-      if (result.ok) return { query, cached: result.cached, places: result.places }
+      const result = await searchPlaces(
+        env,
+        actionTools,
+        userId,
+        { tripId, query, destination: trip.placeLabel || trip.destination, lat: trip.lat, lon: trip.lon },
+        takeUncachedSearch,
+      )
+      if (result.ok) {
+        return {
+          query,
+          cached: result.cached,
+          source: result.source,
+          ...(result.source === 'openstreetmap' ? { attribution: OSM_ATTRIBUTION } : {}),
+          places: result.places,
+        }
+      }
       const refusals = {
         user_cap: ['places_user_cap', 'You have used your place searches for today. They reset at midnight UTC.', 429],
         app_cap: ['places_app_cap', CHAT_MESSAGES.appCap, 429],
-        out_of_credits: ['insufficient_credits', CHAT_MESSAGES.outOfCredits, 402],
+        turn_limit: ['places_turn_limit', 'Only one new place search per message. Use the results you have, or ask the user to send another message.', 429],
         unavailable: ['places_unavailable', 'Place search is unavailable right now. Suggest places from general knowledge and say so.', 503],
       } as const
       const [code, message, status] = refusals[result.reason]

@@ -7,7 +7,7 @@ test.describe('API tests', () => {
   })
 
   test('server actions require sign-in', async ({ request }) => {
-    for (const name of ['createTrip', 'addStop', 'joinTrip', 'createInvite', 'refreshForecast']) {
+    for (const name of ['createTrip', 'createSampleTrip', 'addStop', 'joinTrip', 'createInvite', 'refreshForecast', 'deleteTrip', 'fillTestUsage']) {
       const res = await request.post(`/api/actions/${name}`, { data: {} })
       expect(res.status()).toBe(401)
     }

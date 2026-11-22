@@ -26,7 +26,11 @@ export default defineConfig(({ command }) => ({
     cloudflare({
       inspectorPort: false,
       ...(mockExternalApis(command)
-        ? { config: (config) => ({ vars: { ...config.vars, MOCK_EXTERNAL_APIS: 'true' } }) }
+        ? {
+            config: (config) => ({
+              vars: { ...config.vars, MOCK_EXTERNAL_APIS: 'true', MOCK_RUN_ID: process.env.TRIPBOARD_MOCK_RUN ?? '' },
+            }),
+          }
         : {}),
     }),
     // The app id `define`, the preview-secret cleanup, and the client dedupe

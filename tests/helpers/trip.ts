@@ -60,7 +60,7 @@ export function agentToolNames(page: Page): Promise<string[]> {
   })
 }
 
-const APP_ID = /DEEPSPACE_APP_ID\s*=\s*"([^"]+)"/.exec(
+export const APP_ID = /DEEPSPACE_APP_ID\s*=\s*"([^"]+)"/.exec(
   readFileSync(fileURLToPath(new URL('../../wrangler.toml', import.meta.url)), 'utf8'),
 )?.[1]
 
@@ -124,12 +124,12 @@ export async function createTrip(
   return (res.body.data as { tripId: string }).tripId
 }
 
+/** Cleanup that must work: a refused delete (other than an already deleted trip) fails the test. */
 export async function deleteTrip(page: Page, tripId: string | undefined) {
   if (!tripId) return
-  try {
-    await action(page, 'deleteTrip', { tripId })
-  } catch {
-    // Best-effort cleanup.
+  const res = await action(page, 'deleteTrip', { tripId })
+  if (!res.body.success && res.body.error !== 'Trip not found') {
+    throw new Error(`deleteTrip ${tripId} failed: ${JSON.stringify(res.body)}`)
   }
 }
 

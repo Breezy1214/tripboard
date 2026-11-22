@@ -43,4 +43,6 @@ export interface TeamMember {
   userId: string
   status: 'active' | 'removed'
   role: 'owner' | 'member'
+  name?: string
+  imageUrl?: string
 }

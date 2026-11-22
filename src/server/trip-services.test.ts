@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker.js'
-import { DAILY_CAPS, PAID_COSTS, forecastFromOpenMeteo, placeFromGeocoding, reservePaidCall, takeFreeQuota } from './trip-services'
+import {
+  DAILY_CAPS,
+  PAID_COSTS,
+  chatTurnCredits,
+  fillUsageForTests,
+  forecastFromOpenMeteo,
+  placeFromGeocoding,
+  reservePaidCall,
+  settlePaidCall,
+  takeFreeQuota,
+} from './trip-services'
 
 const env = {} as Env
 
@@ -15,6 +25,13 @@ function fakeUsageRoom({ jitter = true } = {}) {
       await hop()
       const recordId = `row_${nextId++}`
       rows.set(recordId, { ...data })
+      return { success: true, data: { recordId } }
+    },
+    async update(_collection: string, recordId: string, data: Record<string, unknown>) {
+      await hop()
+      const row = rows.get(recordId)
+      if (!row) return { success: false, error: 'Record not found' }
+      rows.set(recordId, { ...row, ...data })
       return { success: true, data: { recordId } }
     },
     async remove(_collection: string, recordId: string) {
@@ -98,21 +115,68 @@ describe('spend caps', () => {
     }
   })
 
-  it('counts every paid kind against one app-wide ceiling', async () => {
+  it('counts every paid kind against one app-wide ceiling, and place searches against their own', async () => {
     const { tools } = fakeUsageRoom({ jitter: false })
-    let credits = 0
+    let places = 0
     let i = 0
-    while ((await reservePaidCall(env, tools, `p${i++}`, 'places')).ok) credits += PAID_COSTS.places
+    while ((await reservePaidCall(env, tools, `p${i++}`, 'places')).ok) places += PAID_COSTS.places
+    expect(places).toBeLessThanOrEqual(DAILY_CAPS.placesCredits)
+    expect(places).toBeGreaterThan(DAILY_CAPS.placesCredits - PAID_COSTS.places)
+    let credits = places
     while ((await reservePaidCall(env, tools, `c${i++}`, 'chat')).ok) credits += PAID_COSTS.chat
-    expect(credits).toBeLessThanOrEqual(DAILY_CAPS.appCredits)
-    expect(credits).toBeGreaterThan(DAILY_CAPS.appCredits - PAID_COSTS.chat)
-    expect(await reservePaidCall(env, tools, 'late', 'geocode')).toEqual({ ok: false, reason: 'app_cap' })
+    while ((await reservePaidCall(env, tools, `g${i++}`, 'geocode')).ok) credits += PAID_COSTS.geocode
+    expect(Math.round(credits * 100)).toBeLessThanOrEqual(DAILY_CAPS.appCredits * 100)
+    expect(credits).toBeGreaterThan(DAILY_CAPS.appCredits - PAID_COSTS.geocode)
+    expect(await reservePaidCall(env, tools, 'late', 'chat')).toEqual({ ok: false, reason: 'app_cap' })
 
     const burstRoom = fakeUsageRoom()
     const mixed = await burst(200, (i) => reservePaidCall(env, burstRoom.tools, `m${i}`, i % 2 ? 'chat' : 'places'))
     const spent = [...burstRoom.rows.values()].reduce((sum, r) => sum + Number(r.credits), 0)
     expect(spent).toBeLessThanOrEqual(DAILY_CAPS.appCredits)
     expect(mixed.filter((r) => r.ok)).toHaveLength(burstRoom.rows.size)
+  })
+})
+
+describe('settling a reservation to its real cost', () => {
+  it('frees the ceiling when a chat turn costs less than its estimate', async () => {
+    const { tools, rows } = fakeUsageRoom({ jitter: false })
+    const turns = []
+    for (let i = 0; i < 100; i++) {
+      const r = await reservePaidCall(env, tools, `u${i}`, 'chat')
+      if (!r.ok) break
+      turns.push(r)
+      await settlePaidCall(tools, r.usageId, chatTurnCredits({ inputTokens: 6000, outputTokens: 300 }))
+    }
+    // 0.1875 credits a turn instead of the 1.5 reserved: about 8x more turns fit under the same ceiling.
+    expect(turns.length).toBe(100)
+    const spent = [...rows.values()].reduce((sum, r) => sum + Number(r.credits), 0)
+    expect(spent).toBeCloseTo(100 * 0.1875, 4)
+  })
+
+  it('counts a turn that costs more than its estimate at the real cost', async () => {
+    const { tools } = fakeUsageRoom({ jitter: false })
+    const first = await reservePaidCall(env, tools, 'u1', 'chat')
+    if (!first.ok) throw new Error('expected a grant')
+    await settlePaidCall(tools, first.usageId, DAILY_CAPS.appCredits)
+    expect(await reservePaidCall(env, tools, 'u2', 'geocode')).toEqual({ ok: false, reason: 'app_cap' })
+  })
+
+  it('prices tokens conservatively and rounds', () => {
+    expect(chatTurnCredits({ inputTokens: 1000, outputTokens: 1000 })).toBe(0.15)
+    expect(chatTurnCredits({})).toBe(0)
+    // Worst case of a bounded turn: about 40k input and 5k output tokens.
+    expect(chatTurnCredits({ inputTokens: 40_000, outputTokens: 5_120 })).toBeLessThanOrEqual(PAID_COSTS.chat + 0.2)
+  })
+
+  it('fills usage for tests only in mocked runs', async () => {
+    const { tools, rows } = fakeUsageRoom({ jitter: false })
+    expect(await fillUsageForTests(env, tools, 'u1', 'chat')).toBe(false)
+    expect(rows.size).toBe(0)
+    const mocked = { MOCK_EXTERNAL_APIS: 'true', MOCK_RUN_ID: 'r1' } as Env
+    expect(await fillUsageForTests(mocked, tools, 'u1', 'places')).toBe(true)
+    expect(rows.size).toBe(DAILY_CAPS.places * 10)
+    expect(await reservePaidCall(mocked, tools, 'u1', 'places')).toEqual({ ok: false, reason: 'user_cap' })
+    expect(await reservePaidCall(env, tools, 'u1', 'places')).toMatchObject({ ok: true })
   })
 })
 

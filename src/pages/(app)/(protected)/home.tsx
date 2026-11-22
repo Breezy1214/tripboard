@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from 'deepspace'
-import { CalendarDays, MapPin, Plus, Sparkles } from 'lucide-react'
+import { CalendarDays, MapPin, Plus, RotateCw, Sparkles, WifiOff } from 'lucide-react'
 import { Badge, Button, useToast } from '@/components/ui'
 import { CreateTripForm } from '../../../components/trip/CreateTripForm'
 import { callAction, takePendingInvite } from '../../../lib/actions'
@@ -15,6 +15,12 @@ function tripPhase(trip: Trip, today: string): { label: string; variant: 'info' 
 }
 
 export default function HomePage() {
+  const [attempt, setAttempt] = useState(0)
+  // A new key re-subscribes the trips query: the in-place retry.
+  return <TripList key={attempt} onRetry={() => setAttempt((n) => n + 1)} />
+}
+
+function TripList({ onRetry }: { onRetry: () => void }) {
   const navigate = useNavigate()
   const { error: toastError } = useToast()
   const { records, status, error } = useQuery<Trip>('trips', { orderBy: 'startDate', orderDir: 'asc' })
@@ -63,16 +69,25 @@ export default function HomePage() {
         </div>
       )}
 
-      {status === 'loading' ? (
+      {status === 'loading' && records.length > 0 && (
+        <p role="status" data-testid="trips-offline" className="mb-4 flex items-center gap-1.5 text-xs text-warning">
+          <WifiOff aria-hidden className="size-3.5" /> Reconnecting. The list updates when the connection is back.
+        </p>
+      )}
+
+      {status === 'loading' && records.length === 0 ? (
         <div className="grid gap-4 sm:grid-cols-2" aria-busy="true">
           {[0, 1].map((i) => (
             <div key={i} className="h-32 animate-pulse rounded-xl border border-border bg-card" />
           ))}
         </div>
-      ) : status === 'error' ? (
-        <div role="alert" className="rounded-xl border border-destructive/40 bg-card p-6 text-sm">
+      ) : status === 'error' && records.length === 0 ? (
+        <div role="alert" data-testid="trips-error" className="rounded-xl border border-destructive/40 bg-card p-6 text-sm">
           <p className="font-medium text-foreground">Could not load your trips</p>
-          <p className="mt-1 text-muted-foreground">{error ?? 'The connection failed.'} Reload the page to try again.</p>
+          <p className="mt-1 text-muted-foreground">{error ?? 'The connection failed.'}</p>
+          <Button variant="outline" size="sm" className="mt-4" onClick={onRetry}>
+            <RotateCw aria-hidden /> Try again
+          </Button>
         </div>
       ) : records.length === 0 ? (
         !creating && (

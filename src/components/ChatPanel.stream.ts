@@ -322,7 +322,7 @@ async function responseError(response: Response): Promise<Error> {
     // Not JSON; show the text as is.
   }
   const error = new Error(message || `Request failed: ${response.status}`)
-  if (response.status === 429 || response.status === 403) error.name = 'NotRetryable'
+  if ([403, 413, 429].includes(response.status)) error.name = 'NotRetryable'
   return error
 }
 

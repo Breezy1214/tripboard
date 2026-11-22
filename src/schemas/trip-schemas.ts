@@ -78,6 +78,10 @@ export const teamMembersSchema: CollectionSchema = {
     { name: 'userId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
     { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['active', 'removed'] } },
     { name: 'role', storage: 'text', interpretation: { kind: 'select', options: ['owner', 'member'] } },
+    // Copied from the member's users row when they create or join the trip:
+    // co-members read names here, since the users roster is scoped to self.
+    { name: 'name', storage: 'text', interpretation: 'plain' },
+    { name: 'imageUrl', storage: 'text', interpretation: 'plain' },
   ],
   teamField: 'teamId',
   uniqueOn: ['teamId', 'userId'],
@@ -125,9 +129,26 @@ export const placeSearchesSchema: CollectionSchema = {
     { name: 'tripId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
     { name: 'query', storage: 'text', interpretation: 'plain', required: true, immutable: true },
     { name: 'places', storage: 'text', interpretation: { kind: 'json' } },
+    { name: 'source', storage: 'text', interpretation: { kind: 'select', options: ['serpapi', 'openstreetmap'] } },
   ],
   uniqueOn: ['tripId', 'query'],
   permissions: adminReadOnly,
 }
 
-export const tripSchemas = [tripsSchema, stopsSchema, teamMembersSchema, tripInvitesSchema, usageSchema, placeSearchesSchema]
+/** One row per Nominatim request, keyed by the second it was sent in: the unique index keeps the app at one request per second. */
+export const osmSlotsSchema: CollectionSchema = {
+  name: 'osm_slots',
+  columns: [{ name: 'second', storage: 'text', interpretation: 'plain', required: true, immutable: true }],
+  uniqueOn: ['second'],
+  permissions: adminReadOnly,
+}
+
+export const tripSchemas = [
+  tripsSchema,
+  stopsSchema,
+  teamMembersSchema,
+  tripInvitesSchema,
+  usageSchema,
+  placeSearchesSchema,
+  osmSlotsSchema,
+]

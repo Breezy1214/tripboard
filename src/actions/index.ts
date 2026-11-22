@@ -2,7 +2,7 @@ import type { ActionHandler, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import { addDays, todayIso, validateTripDates } from '../lib/trip-dates'
 import { addStopFor, refreshTripForecast, text } from '../server/board-services'
-import { geocode, getTrip, isTripMember, reservePaidCall, takeFreeQuota } from '../server/trip-services'
+import { fillUsageForTests, geocode, getTrip, isTripMember, reservePaidCall, takeFreeQuota } from '../server/trip-services'
 
 const INVITE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
 const INVITE_CODE = /^[a-z0-9]{10}$/
@@ -16,6 +16,16 @@ function newInviteCode(): string {
   return Array.from(bytes, (b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('')
 }
 
+/** Name and avatar from the member's own users row, so co-members can show them without the app-wide roster. */
+async function memberProfile(tools: ActionTools, userId: string) {
+  const res = await tools.get<{ name?: string; imageUrl?: string }>('users', userId)
+  const user = res.success ? res.data.record?.data : undefined
+  return {
+    name: text(user?.name, 120),
+    ...(user?.imageUrl && user.imageUrl.length <= 2048 ? { imageUrl: user.imageUrl } : {}),
+  }
+}
+
 async function insertTrip(
   tools: ActionTools,
   userId: string,
@@ -24,7 +34,13 @@ async function insertTrip(
   const tripId = `trip_${crypto.randomUUID()}`
   const created = await tools.create('trips', { ...trip, teamId: tripId }, tripId)
   if (!created.success) return created
-  const member = await tools.create('team_members', { teamId: tripId, userId, status: 'active', role: 'owner' })
+  const member = await tools.create('team_members', {
+    teamId: tripId,
+    userId,
+    status: 'active',
+    role: 'owner',
+    ...(await memberProfile(tools, userId)),
+  })
   if (!member.success) {
     await tools.remove('trips', tripId)
     return member
@@ -122,8 +138,14 @@ const joinTrip: ActionHandler<Env> = async ({ userId, params, tools }) => {
   if (!tripId) return fail('That invite link is not valid or was removed')
   const trip = await getTrip(tools, tripId)
   if (!trip) return fail('This trip no longer exists')
-  if (!(await isTripMember(tools, tripId, userId))) {
-    const created = await tools.create('team_members', { teamId: tripId, userId, status: 'active', role: 'member' })
+  const profile = await memberProfile(tools, userId)
+  const existing = await tools.query('team_members', { where: { teamId: tripId, userId }, limit: 1 })
+  const row = existing.success ? existing.data.records[0] : undefined
+  if (row?.data.status === 'removed') return fail('You were removed from this trip')
+  if (row) {
+    await tools.update('team_members', row.recordId, profile)
+  } else {
+    const created = await tools.create('team_members', { teamId: tripId, userId, status: 'active', role: 'member', ...profile })
     if (!created.success && !/Duplicate/i.test(created.error)) return created
   }
   return { success: true, data: { tripId, name: trip.data.name } }
@@ -140,24 +162,37 @@ const deleteTrip: ActionHandler<Env> = async ({ userId, params, tools }) => {
   if (!trip) return fail('Trip not found')
   if (trip.createdBy !== userId) return fail('Only the person who created the trip can delete it')
   const chats = await tools.query('ai-chats', { where: { tripId }, limit: 500 })
+  const drain = async (collection: string, where: Record<string, string>) => {
+    for (;;) {
+      const res = await tools.deleteWhere(collection, where, 500)
+      if (!res.success || res.data.deleted < 500) return res
+    }
+  }
   const targets: [string, Record<string, string>][] = [
     ...(chats.success ? chats.data.records : []).map((chat): [string, Record<string, string>] => ['ai-messages', { chatId: chat.recordId }]),
     ['ai-chats', { tripId }],
     ['place_searches', { tripId }],
     ['stops', { tripId }],
     ['trip_invites', { tripId }],
-    ['team_members', { teamId: tripId }],
   ]
   for (const [collection, where] of targets) {
-    for (;;) {
-      const res = await tools.deleteWhere(collection, where, 500)
-      if (!res.success) return res
-      if (res.data.deleted < 500) break
-    }
+    const res = await drain(collection, where)
+    if (!res.success) return res
   }
+  // Members last: the room only sends a delete to sockets that can still read
+  // the row, so open boards hear about the trip going away while still members.
   const removed = await tools.remove('trips', tripId)
   if (!removed.success) return removed
+  const members = await drain('team_members', { teamId: tripId })
+  if (!members.success) return members
   return { success: true, data: { tripId } }
+}
+
+/** Mocked test runs only (refused otherwise): fill the caller's daily cap for chat or places, so e2e tests reach the real refusal. */
+const fillTestUsage: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
+  const kind = params.kind === 'chat' || params.kind === 'places' ? params.kind : null
+  if (!kind || !(await fillUsageForTests(env, tools, userId, kind))) return fail('Not available')
+  return { success: true, data: { kind } }
 }
 
 export const actions: Record<string, ActionHandler<Env>> = {
@@ -168,4 +203,5 @@ export const actions: Record<string, ActionHandler<Env>> = {
   joinTrip,
   refreshForecast,
   deleteTrip,
+  fillTestUsage,
 }

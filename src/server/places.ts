@@ -1,13 +1,14 @@
 /**
- * Place search for the co-planner: SerpApi Google Maps results (owner-billed,
- * 3.25 credits a call), cached per trip and query in `place_searches`, and
- * reserved against the caller's daily cap before any uncached call.
+ * Place search for the co-planner. SerpApi Google Maps answers first
+ * (owner-billed, 3.25 credits). When it fails (out of searches, upstream
+ * error, out of credits) the free OpenStreetMap Nominatim search answers
+ * instead. Results are cached per trip and query in `place_searches`, and every
+ * uncached search, free or not, is reserved against the caller's daily cap.
  */
 
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker.js'
-import { mocksExternalApis, reservePaidCall } from './trip-services.js'
-import { isOutOfCredits } from '../ai/errors.js'
+import { mocksExternalApis, reservePaidCall, settlePaidCall } from './trip-services.js'
 
 export interface Place {
   name: string
@@ -18,6 +19,10 @@ export interface Place {
   lat?: number
   lon?: number
 }
+
+export type PlaceSource = 'serpapi' | 'openstreetmap'
+
+export const OSM_ATTRIBUTION = 'Place data © OpenStreetMap contributors (ODbL)'
 
 const MAX_PLACES = 6
 
@@ -53,20 +58,49 @@ export function placesFromSerpApi(data: unknown): Place[] {
     }))
 }
 
-function mockPlaces(query: string): Place[] {
+interface NominatimPlace {
+  name?: string
+  display_name?: string
+  type?: string
+  lat?: string
+  lon?: string
+}
+
+/**
+ * Nominatim `format=jsonv2`: coordinates are strings, the address is one
+ * display line that starts with the name. Unnamed places (a bakery with no
+ * name tag reads as its street) are dropped.
+ */
+export function placesFromNominatim(data: unknown): Place[] {
+  const raw = Array.isArray(data) ? (data as NominatimPlace[]) : []
+  return raw
+    .map((p) => {
+      const parts = (p.display_name ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+      const name = p.name?.trim()
+      if (!name) return null
+      const lat = Number(p.lat)
+      const lon = Number(p.lon)
+      const address = (parts[0] === name ? parts.slice(1) : parts).slice(0, 4).join(', ')
+      return {
+        name,
+        ...(address ? { address } : {}),
+        ...(p.type && p.type !== 'yes' ? { type: p.type.replace(/_/g, ' ') } : {}),
+        ...(Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : {}),
+      }
+    })
+    .filter((p): p is Place => p !== null)
+    .slice(0, MAX_PLACES)
+}
+
+function mockPlaces(query: string, source: PlaceSource): Place[] {
   return [1, 2, 3].map((i) => ({
-    name: `${query} spot ${i} (test)`,
+    name: `${query} ${source === 'serpapi' ? 'spot' : 'osm place'} ${i} (test)`,
     address: `${i} Test Street`,
-    rating: 4 + i / 10,
-    reviews: 100 * i,
+    ...(source === 'serpapi' ? { rating: 4 + i / 10, reviews: 100 * i } : {}),
     lat: 38.7 + i / 100,
     lon: -9.13,
   }))
 }
-
-export type PlaceSearchResult =
-  | { ok: true; places: Place[]; cached: boolean }
-  | { ok: false; reason: 'user_cap' | 'app_cap' | 'out_of_credits' | 'unavailable' }
 
 interface SearchInput {
   tripId: string
@@ -76,34 +110,122 @@ interface SearchInput {
   lon?: number | null
 }
 
-/** Callers check trip membership first; this only handles cache, caps and the paid call. */
-export async function searchPlaces(env: Env, tools: ActionTools, userId: string, input: SearchInput): Promise<PlaceSearchResult> {
-  const query = normalizeQuery(input.query)
-  const cached = await tools.query<{ places?: Place[] }>('place_searches', { where: { tripId: input.tripId, query }, limit: 1 })
-  const hit = cached.success ? cached.data.records[0] : undefined
-  if (hit) return { ok: true, places: hit.data.places ?? [], cached: true }
+function located(input: SearchInput): input is SearchInput & { lat: number; lon: number } {
+  return typeof input.lat === 'number' && typeof input.lon === 'number'
+}
 
+/** Null when SerpApi did not answer; its call is then not billed. Mocked runs fail on purpose for queries with "osm" in them. */
+async function serpApiPlaces(env: Env, tools: ActionTools, input: SearchInput): Promise<Place[] | null> {
+  if (mocksExternalApis(env)) return /\bosm\b/i.test(input.query) ? null : mockPlaces(input.query.trim(), 'serpapi')
+  const res = await tools.integration<unknown>('serpapi/places-search', {
+    q: located(input) ? input.query : `${input.query} in ${input.destination}`,
+    ...(located(input) ? { ll: `@${input.lat.toFixed(4)},${input.lon.toFixed(4)},14z` } : {}),
+    hl: 'en',
+  })
+  if (!res.success) {
+    console.warn(`[places] serpapi failed, trying OpenStreetMap: ${res.error}`)
+    return null
+  }
+  return placesFromSerpApi(res.data)
+}
+
+const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
+/** Nominatim's usage policy asks for an app-identifying User-Agent: the app name and URL only, nothing about the user. */
+const NOMINATIM_USER_AGENT = 'tripboard-app/1.0 (+https://tripboard-app.app.space)'
+/** About 15 km around the destination. */
+const VIEWBOX_DEGREES = 0.15
+
+export function nominatimUrl(input: SearchInput): URL {
+  const url = new URL(NOMINATIM_URL)
+  url.searchParams.set('format', 'jsonv2')
+  url.searchParams.set('limit', String(MAX_PLACES))
+  url.searchParams.set('accept-language', 'en')
+  if (located(input)) {
+    const d = VIEWBOX_DEGREES
+    url.searchParams.set('q', input.query)
+    url.searchParams.set('viewbox', [input.lon - d, input.lat + d, input.lon + d, input.lat - d].map((n) => n.toFixed(4)).join(','))
+    url.searchParams.set('bounded', '1')
+  } else {
+    url.searchParams.set('q', `${input.query}, ${input.destination}`)
+  }
+  return url
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Nominatim allows at most one request per second from the whole app. Each
+ * call claims the current second as a unique `osm_slots` row in the app's one
+ * record room, so two workers can never send in the same second; a taken
+ * second waits for the next. Rows stay (one per OSM search, bounded by caps).
+ */
+async function takeNominatimSlot(tools: ActionTools): Promise<boolean> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const created = await tools.create('osm_slots', { second: String(Math.floor(Date.now() / 1000)) })
+    if (created.success) return true
+    if (!/Duplicate/i.test(created.error)) return false
+    await sleep(1000 - (Date.now() % 1000) + 20)
+  }
+  return false
+}
+
+async function openStreetMapPlaces(env: Env, tools: ActionTools, input: SearchInput): Promise<Place[] | null> {
+  if (!(await takeNominatimSlot(tools))) return null
+  if (mocksExternalApis(env)) return mockPlaces(input.query.trim(), 'openstreetmap')
+  try {
+    const res = await fetch(nominatimUrl(input), {
+      headers: { 'User-Agent': NOMINATIM_USER_AGENT, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) {
+      console.warn(`[places] nominatim ${res.status}`)
+      return null
+    }
+    return placesFromNominatim(await res.json())
+  } catch (err) {
+    console.warn(`[places] nominatim request failed: ${String(err)}`)
+    return null
+  }
+}
+
+export type PlaceSearchResult =
+  | { ok: true; places: Place[]; cached: boolean; source: PlaceSource }
+  | { ok: false; reason: 'user_cap' | 'app_cap' | 'turn_limit' | 'unavailable' }
+
+/**
+ * Callers check trip membership first; this handles the cache, the caps and
+ * the calls. `takeUncached` is asked once per cache miss so a caller can limit
+ * new searches per request.
+ */
+export async function searchPlaces(
+  env: Env,
+  tools: ActionTools,
+  userId: string,
+  input: SearchInput,
+  takeUncached: () => boolean = () => true,
+): Promise<PlaceSearchResult> {
+  const query = normalizeQuery(input.query)
+  const cached = await tools.query<{ places?: Place[]; source?: PlaceSource }>('place_searches', {
+    where: { tripId: input.tripId, query },
+    limit: 1,
+  })
+  const hit = cached.success ? cached.data.records[0] : undefined
+  if (hit) return { ok: true, places: hit.data.places ?? [], cached: true, source: hit.data.source ?? 'serpapi' }
+
+  if (!takeUncached()) return { ok: false, reason: 'turn_limit' }
   const reservation = await reservePaidCall(env, tools, userId, 'places')
   if (!reservation.ok) return { ok: false, reason: reservation.reason }
 
-  let places: Place[]
-  if (mocksExternalApis(env)) {
-    places = mockPlaces(input.query.trim())
-  } else {
-    const located = typeof input.lat === 'number' && typeof input.lon === 'number'
-    const res = await tools.integration<unknown>('serpapi/places-search', {
-      q: located ? input.query : `${input.query} in ${input.destination}`,
-      ...(located ? { ll: `@${input.lat!.toFixed(4)},${input.lon!.toFixed(4)},14z` } : {}),
-      hl: 'en',
-    })
-    if (!res.success) {
-      console.warn(`[places] failed: ${res.error}`)
-      return { ok: false, reason: isOutOfCredits(res) ? 'out_of_credits' : 'unavailable' }
-    }
-    places = placesFromSerpApi(res.data)
+  let source: PlaceSource = 'serpapi'
+  let places = await serpApiPlaces(env, tools, input)
+  if (!places) {
+    source = 'openstreetmap'
+    await settlePaidCall(tools, reservation.usageId, 0)
+    places = await openStreetMapPlaces(env, tools, input)
   }
+  if (!places) return { ok: false, reason: 'unavailable' }
 
-  const saved = await tools.create('place_searches', { tripId: input.tripId, query, places })
+  const saved = await tools.create('place_searches', { tripId: input.tripId, query, places, source })
   if (!saved.success && !/Duplicate/i.test(saved.error)) console.warn(`[places] cache write failed: ${saved.error}`)
-  return { ok: true, places, cached: false }
+  return { ok: true, places, cached: false, source }
 }

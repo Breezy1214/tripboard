@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useAuth, useMutations, usePresenceRoom, useQuery, useUser, useUserLookup, type RecordData } from 'deepspace'
-import { ArrowLeft, CalendarDays, MapPin, Sparkles, Trash2, WifiOff } from 'lucide-react'
+import { useAuth, useMutations, usePresenceRoom, useQuery, useUser, type RecordData } from 'deepspace'
+import { ArrowLeft, CalendarDays, MapPin, RotateCw, Sparkles, Trash2, WifiOff } from 'lucide-react'
 import { Button, ConfirmModal, useToast } from '@/components/ui'
 import { DayColumn, type Viewer } from '../../../../components/trip/DayColumn'
 import type { ForecastLoad } from '../../../../components/trip/DayWeather'
@@ -22,8 +22,18 @@ function wideScreen() {
 
 export default function TripPage() {
   const { tripId = '' } = useParams()
+  const [attempt, setAttempt] = useState(0)
+  // A new key re-subscribes every query on the page: the in-place retry.
+  return <TripLoader key={`${tripId}:${attempt}`} tripId={tripId} onRetry={() => setAttempt((n) => n + 1)} />
+}
+
+function TripLoader({ tripId, onRetry }: { tripId: string; onRetry: () => void }) {
   const { records, status, error } = useQuery<Trip>('trips', { where: { teamId: tripId } })
   const trip = records.find((r) => r.recordId === tripId)
+
+  // A dropped socket puts every query back to 'loading' but keeps its records,
+  // so the board (and any open editor or chat) stays mounted while it reconnects.
+  if (trip) return <TripBoard trip={trip} onRetry={onRetry} />
 
   if (status === 'loading') {
     return (
@@ -38,40 +48,44 @@ export default function TripPage() {
     )
   }
 
-  if (status === 'error' || !trip) {
+  if (status === 'error') {
     return (
-      <div data-testid="trip-not-found" className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
-        <h1 className="text-lg font-semibold text-foreground">
-          {status === 'error' ? 'Could not load this trip' : 'Trip not found'}
-        </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {status === 'error'
-            ? (error ?? 'The connection failed. Reload to try again.')
-            : 'It may have been deleted, or you are not a member. Ask someone on the trip for an invite link.'}
-        </p>
-        <Link to="/home" className="mt-6 text-sm font-medium text-primary hover:underline">
-          Back to your trips
-        </Link>
+      <div role="alert" data-testid="trip-error" className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
+        <h1 className="text-lg font-semibold text-foreground">Could not load this trip</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{error ?? 'The connection failed.'}</p>
+        <Button className="mt-6" onClick={onRetry}>
+          <RotateCw aria-hidden /> Try again
+        </Button>
       </div>
     )
   }
 
-  return <TripBoard trip={trip} />
+  return (
+    <div data-testid="trip-not-found" className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
+      <h1 className="text-lg font-semibold text-foreground">Trip not found</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        It may have been deleted, or you are not a member. Ask someone on the trip for an invite link.
+      </p>
+      <Link to="/home" className="mt-6 text-sm font-medium text-primary hover:underline">
+        Back to your trips
+      </Link>
+    </div>
+  )
 }
 
-function TripBoard({ trip }: { trip: RecordData<Trip> }) {
+function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => void }) {
   const tripId = trip.recordId
   const navigate = useNavigate()
   const { error: toastError } = useToast()
   const { userId } = useAuth()
   const { user } = useUser()
-  const { getUser } = useUserLookup()
   const stopsQuery = useQuery<Stop>('stops', { where: { tripId } })
   const membersQuery = useQuery<TeamMember>('team_members', { where: { teamId: tripId } })
   const { ready, putConfirmed, removeConfirmed } = useMutations<Stop>('stops')
   const { peers, connected, updateState } = usePresenceRoom(`trip:${tripId}`)
   const [viewDay, setViewDay] = useState<string | null>(null)
   const [forecastLoad, setForecastLoad] = useState<ForecastLoad>('idle')
+  const [forecastAttempt, setForecastAttempt] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [chatOpen, setChatOpen] = useState(wideScreen)
@@ -95,7 +109,7 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
     callAction('refreshForecast', { tripId })
       .then(() => setForecastLoad('idle'))
       .catch(() => setForecastLoad('error'))
-  }, [needsForecast, tripId])
+  }, [needsForecast, tripId, forecastAttempt])
 
   const stopsByDay = useMemo(() => {
     const map = new Map<string, RecordData<Stop>[]>()
@@ -116,20 +130,35 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
     return [...seen.values()]
   }, [peers, userId])
 
+  const members = useMemo(() => membersQuery.records.filter((m) => m.data.status !== 'removed'), [membersQuery.records])
+
+  // Names come from the trip's own member rows (the users roster only holds
+  // yourself), then from live presence for rows written before names were kept.
+  const people = useMemo(() => {
+    const map = new Map<string, { name?: string; imageUrl?: string }>()
+    for (const m of members) map.set(m.data.userId, { name: m.data.name || undefined, imageUrl: m.data.imageUrl || undefined })
+    for (const peer of uniquePeers) {
+      const known = map.get(peer.userId)
+      if (!known?.name && peer.userName) map.set(peer.userId, { ...known, name: peer.userName })
+    }
+    if (userId && user) map.set(userId, { name: user.name || undefined, imageUrl: user.imageUrl || undefined })
+    return map
+  }, [members, uniquePeers, userId, user])
+  const nameFor = useCallback((id: string) => people.get(id)?.name, [people])
+
   const viewersByDay = useMemo(() => {
     const map = new Map<string, Viewer[]>()
     for (const peer of uniquePeers) {
       const day = typeof peer.state.day === 'string' ? peer.state.day : null
       if (!day) continue
       const list = map.get(day) ?? []
-      list.push({ userId: peer.userId, name: peer.userName || 'Someone', imageUrl: getUser(peer.userId)?.imageUrl })
+      list.push({ userId: peer.userId, name: peer.userName || 'Someone', imageUrl: people.get(peer.userId)?.imageUrl })
       map.set(day, list)
     }
     return map
-  }, [uniquePeers, getUser])
+  }, [uniquePeers, people])
 
   const onlineIds = new Set(uniquePeers.map((p) => p.userId))
-  const members = membersQuery.records.filter((m) => m.data.status !== 'removed')
 
   async function move(day: string, index: number, direction: -1 | 1) {
     const order = [...(stopsByDay.get(day) ?? [])]
@@ -198,9 +227,9 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
                 {members
                   .filter((m) => m.data.userId !== userId)
                   .map((m) => {
-                    const info = getUser(m.data.userId)
+                    const info = people.get(m.data.userId)
                     const peer = uniquePeers.find((p) => p.userId === m.data.userId)
-                    const name = peer?.userName || info?.name || 'Trip member'
+                    const name = info?.name || peer?.userName || 'Trip member'
                     const online = onlineIds.has(m.data.userId)
                     return (
                       <PersonAvatar
@@ -233,19 +262,23 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
             </div>
           </div>
           {!ready && (
-            <p className="mx-auto mt-3 flex max-w-7xl items-center gap-1.5 text-xs text-warning">
-              <WifiOff aria-hidden className="size-3.5" /> Connecting. Editing turns on when the board is live.
+            <p role="status" data-testid="board-offline" className="mx-auto mt-3 flex max-w-7xl items-center gap-1.5 text-xs text-warning">
+              <WifiOff aria-hidden className="size-3.5" /> Reconnecting to the board. Editing is paused until it is live; nothing you typed is lost.
             </p>
           )}
         </header>
 
-        <div className="flex-1 overflow-x-auto px-4 py-5 sm:px-6">
+        {/* Bottom padding on phones lets the last stops scroll clear of the floating Co-planner button. */}
+        <div className="flex-1 snap-x snap-mandatory scroll-px-4 overflow-x-auto px-4 pb-24 pt-5 sm:scroll-px-6 sm:px-6 lg:pb-5">
           {stopsQuery.status === 'error' ? (
-            <p role="alert" className="text-sm text-destructive">
+            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-destructive">
               Could not load stops: {stopsQuery.error ?? 'connection failed'}.
-            </p>
+              <Button variant="outline" size="sm" onClick={onRetry}>
+                <RotateCw aria-hidden /> Try again
+              </Button>
+            </div>
           ) : (
-            <div data-testid="trip-board" className="mx-auto flex max-w-7xl snap-x snap-mandatory gap-4 pb-4">
+            <div data-testid="trip-board" className="mx-auto flex max-w-7xl gap-4 pb-4">
               {days.map((day, i) => (
                 <DayColumn
                   key={day}
@@ -260,6 +293,8 @@ function TripBoard({ trip }: { trip: RecordData<Trip> }) {
                   hasLocation={hasLocation}
                   weather={forecast?.days?.[day]}
                   forecastLoad={forecastLoad === 'idle' && needsForecast ? 'loading' : forecastLoad}
+                  onRetryForecast={() => setForecastAttempt((n) => n + 1)}
+                  nameFor={nameFor}
                   onFocusDay={setViewDay}
                   onMove={move}
                   onSave={save}

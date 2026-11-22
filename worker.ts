@@ -127,6 +127,8 @@ export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    * return canned data so no test spends credits.
    */
   MOCK_EXTERNAL_APIS?: string
+  /** Set with MOCK_EXTERNAL_APIS: one id per Playwright run, so each run counts usage from zero. */
+  MOCK_RUN_ID?: string
 }
 
 export type AppContext = { Bindings: Env }

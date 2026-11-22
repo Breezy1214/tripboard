@@ -1,3 +1,6 @@
+/** Longest chat message the route accepts; the chat box enforces it too. Bounds one turn's input. */
+export const CHAT_MESSAGE_MAX_LENGTH = 2000
+
 /** Friendly text for the chat panel when the owner's free credits run out or a cap is reached. */
 export const CHAT_MESSAGES = {
   outOfCredits:

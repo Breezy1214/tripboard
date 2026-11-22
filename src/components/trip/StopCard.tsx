@@ -1,5 +1,4 @@
 import { useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
-import { useUserLookup } from 'deepspace'
 import { ArrowDown, ArrowUp, Clock, MapPin, Pencil, Sparkles, Star, Trash2 } from 'lucide-react'
 import { Button, ConfirmModal, Input, Label, Textarea, useToast } from '@/components/ui'
 import { formatDay } from '../../lib/trip-dates'
@@ -11,17 +10,17 @@ interface Props {
   canWrite: boolean
   isFirst: boolean
   isLast: boolean
+  nameFor: (userId: string) => string | undefined
   onMove: (direction: -1 | 1) => Promise<void>
   onSave: (patch: Partial<Stop>) => Promise<void>
   onDelete: () => Promise<void>
 }
 
-export function StopCard({ stop, days, canWrite, isFirst, isLast, onMove, onSave, onDelete }: Props) {
+export function StopCard({ stop, days, canWrite, isFirst, isLast, nameFor, onMove, onSave, onDelete }: Props) {
   const { error } = useToast()
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
-  const { getName } = useUserLookup()
   const { title, time, notes, source, addedBy, address, rating } = stop.data
 
   async function run(task: () => Promise<void>, failure: string) {
@@ -83,7 +82,7 @@ export function StopCard({ stop, days, canWrite, isFirst, isLast, onMove, onSave
           )}
           {source === 'ai' && (
             <p data-testid="stop-ai-badge" className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-              <Sparkles aria-hidden className="size-3" /> Added by AI for {(addedBy && getName(addedBy)) || 'a trip member'}
+              <Sparkles aria-hidden className="size-3" /> Added by AI for {(addedBy && nameFor(addedBy)) || 'a trip member'}
             </p>
           )}
         </div>

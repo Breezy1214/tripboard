@@ -13,13 +13,13 @@ import { todayIso } from '../lib/trip-dates.js'
 import type { Env } from '../../worker.js'
 
 /**
- * Credits per call. Chat is a per-turn estimate, tool steps included: two real
- * claude-haiku-5-5 turns cost 0.23 credits in all (11-22), so 0.5 leaves room
- * for longer chats.
+ * Credits reserved per call. Geocoding and SerpApi are flat prices. A chat turn
+ * reserves its bounded worst case and is settled to its measured token cost when
+ * it ends (settlePaidCall), so the ceiling counts real spend, not the estimate.
  */
 export const PAID_COSTS = {
   geocode: 0.2,
-  chat: 0.5,
+  chat: 1.5,
   places: 3.25,
 } as const
 
@@ -30,26 +30,41 @@ export const DAILY_CAPS = {
   geocode: 10,
   /** Per-user AI chat turns per UTC day. */
   chat: 15,
-  /** Per-user uncached place searches per UTC day. */
-  places: 8,
+  /** Per-user uncached place searches per UTC day (SerpApi or the free OpenStreetMap fallback). */
+  places: 3,
   /** Per-user trips created per UTC day (free, but keeps the room tidy). */
   trip: 20,
+  /** App-wide credits per UTC day for place searches, inside appCredits. */
+  placesCredits: 20,
   /** App-wide owner-billed credits per UTC day, across every paid kind. */
   appCredits: 40,
 } as const
+
+/**
+ * claude-haiku-5-5 token prices in credits per 1k tokens (1 credit = $0.01).
+ * Set above what was billed on 11-22 (4 model steps of about 5k input tokens
+ * each cost $0.00226 in all), so a settled turn errs high.
+ */
+export const CHAT_CREDITS_PER_1K = { input: 0.025, output: 0.125 } as const
+
+export function chatTurnCredits(usage: { inputTokens?: number; outputTokens?: number }): number {
+  const credits =
+    ((usage.inputTokens ?? 0) * CHAT_CREDITS_PER_1K.input + (usage.outputTokens ?? 0) * CHAT_CREDITS_PER_1K.output) / 1000
+  return Math.round(credits * 10_000) / 10_000
+}
 
 export function mocksExternalApis(env: Env): boolean {
   return env.MOCK_EXTERNAL_APIS === 'true'
 }
 
-/** Mocked runs spend nothing and reuse one local room all day, so caps stretch. */
-function capFor(env: Env, cap: number): number {
-  return mocksExternalApis(env) ? cap * 100 : cap
+/** Mocked runs spend nothing and share one local room per run, so caps stretch. */
+export function capFor(env: Env, cap: number): number {
+  return mocksExternalApis(env) ? cap * 10 : cap
 }
 
-/** Mocked runs count under their own day key, so tests never use up a local dev server's real caps. */
+/** Mocked runs count under a key per test run, so tests never use up a local dev server's real caps or an earlier run's. */
 function usageDay(env: Env): string {
-  return mocksExternalApis(env) ? `test-${todayIso()}` : todayIso()
+  return mocksExternalApis(env) ? `test-${env.MOCK_RUN_ID ?? ''}-${todayIso()}` : todayIso()
 }
 
 export async function isTripMember(tools: ActionTools, tripId: string, userId: string): Promise<boolean> {
@@ -87,12 +102,12 @@ async function claimUsage<R extends string>(
   tools: ActionTools,
   row: UsageRow,
   check: () => Promise<R | null>,
-): Promise<R | 'error' | null> {
+): Promise<{ refusal: R | 'error' | null; usageId?: string }> {
   const created = await tools.create('usage', row)
-  if (!created.success) return 'error'
+  if (!created.success) return { refusal: 'error' }
   const refusal = await check()
   if (refusal) await tools.remove('usage', created.data.recordId)
-  return refusal
+  return { refusal, usageId: created.data.recordId }
 }
 
 async function overUserCap(tools: ActionTools, userId: string, day: string, kind: string, cap: number) {
@@ -100,14 +115,12 @@ async function overUserCap(tools: ActionTools, userId: string, day: string, kind
   return !rows || rows.length > cap
 }
 
-/** Rows past the limit cannot change the answer: the returned ones already exceed the ceiling. */
-async function overAppCeiling(tools: ActionTools, day: string, cap: number) {
-  const perKind = await Promise.all(
-    (Object.keys(PAID_COSTS) as PaidKind[]).map((kind) =>
-      usageRows(tools, { day, kind }, Math.floor(cap / PAID_COSTS[kind]) + 1),
-    ),
-  )
-  if (perKind.some((rows) => !rows)) return true
+/** Settled rows can hold any amount, so a ceiling reads every row of the day. A day with this many rows refuses (fail closed). */
+const CEILING_ROW_LIMIT = 2000
+
+async function overCeiling(tools: ActionTools, day: string, cap: number, kinds: readonly PaidKind[]) {
+  const perKind = await Promise.all(kinds.map((kind) => usageRows(tools, { day, kind }, CEILING_ROW_LIMIT)))
+  if (perKind.some((rows) => !rows || rows.length >= CEILING_ROW_LIMIT)) return true
   const credits = perKind.flatMap((rows) => rows ?? []).reduce((sum, r) => sum + Number(r.data.credits ?? 0), 0)
   return Math.round(credits * 100) > Math.round(cap * 100)
 }
@@ -116,33 +129,57 @@ async function overAppCeiling(tools: ActionTools, day: string, cap: number) {
 export async function takeFreeQuota(env: Env, tools: ActionTools, userId: string, kind: 'trip'): Promise<boolean> {
   const day = usageDay(env)
   const cap = capFor(env, DAILY_CAPS[kind])
-  const refusal = await claimUsage(tools, { userId, day, kind, count: 1, credits: 0 }, async () =>
+  const { refusal } = await claimUsage(tools, { userId, day, kind, count: 1, credits: 0 }, async () =>
     (await overUserCap(tools, userId, day, kind, cap)) ? 'cap' : null,
   )
   return refusal === null
 }
 
+export type Reservation = { ok: true; usageId: string } | { ok: false; reason: 'user_cap' | 'app_cap' }
+
+const ALL_KINDS = Object.keys(PAID_COSTS) as PaidKind[]
+
 /**
- * Reserve one owner-billed call against the caller's daily cap and the
- * app-wide credit ceiling. Usage is written before the call, so a failed call
- * still counts (it may have been billed).
+ * Reserve one owner-billed call against the caller's daily cap, the app-wide
+ * place-search ceiling (places only) and the app-wide credit ceiling. Usage is
+ * written before the call, so a failed call still counts (it may have been
+ * billed) until settlePaidCall corrects it.
  */
-export async function reservePaidCall(
-  env: Env,
-  tools: ActionTools,
-  userId: string,
-  kind: PaidKind,
-): Promise<{ ok: true } | { ok: false; reason: 'user_cap' | 'app_cap' }> {
+export async function reservePaidCall(env: Env, tools: ActionTools, userId: string, kind: PaidKind): Promise<Reservation> {
   const day = usageDay(env)
-  const refusal = await claimUsage(tools, { userId, day, kind, count: 1, credits: PAID_COSTS[kind] }, async () => {
-    const [userOver, appOver] = await Promise.all([
-      overUserCap(tools, userId, day, kind, capFor(env, DAILY_CAPS[kind])),
-      overAppCeiling(tools, day, capFor(env, DAILY_CAPS.appCredits)),
-    ])
-    return userOver ? 'user_cap' : appOver ? 'app_cap' : null
-  })
-  if (refusal === null) return { ok: true }
+  const { refusal, usageId } = await claimUsage(
+    tools,
+    { userId, day, kind, count: 1, credits: PAID_COSTS[kind] },
+    async () => {
+      const [userOver, placesOver, appOver] = await Promise.all([
+        overUserCap(tools, userId, day, kind, capFor(env, DAILY_CAPS[kind])),
+        kind === 'places' && overCeiling(tools, day, capFor(env, DAILY_CAPS.placesCredits), ['places']),
+        overCeiling(tools, day, capFor(env, DAILY_CAPS.appCredits), ALL_KINDS),
+      ])
+      return userOver ? 'user_cap' : placesOver || appOver ? 'app_cap' : null
+    },
+  )
+  if (refusal === null && usageId) return { ok: true, usageId }
   return { ok: false, reason: refusal === 'user_cap' ? 'user_cap' : 'app_cap' }
+}
+
+/** Replace a reservation's estimate with what the call really cost (0 for a free fallback or a failed upstream call). */
+export async function settlePaidCall(tools: ActionTools, usageId: string, credits: number): Promise<void> {
+  const res = await tools.update('usage', usageId, { credits })
+  if (!res.success) console.warn(`[usage] settle failed, the reserved estimate stays counted: ${res.error}`)
+}
+
+/** Mocked runs only: fill the caller's cap for one kind with zero-credit rows, so a test reaches the real refusal path. */
+export async function fillUsageForTests(env: Env, tools: ActionTools, userId: string, kind: PaidKind): Promise<boolean> {
+  if (!mocksExternalApis(env)) return false
+  const day = usageDay(env)
+  const cap = capFor(env, DAILY_CAPS[kind])
+  const have = (await usageRows(tools, { userId, day, kind }, cap + 1)) ?? []
+  for (let i = have.length; i < cap; i++) {
+    const created = await tools.create('usage', { userId, day, kind, count: 1, credits: 0 })
+    if (!created.success) return false
+  }
+  return true
 }
 
 export interface GeocodeResult {

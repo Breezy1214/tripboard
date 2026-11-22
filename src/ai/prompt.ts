@@ -8,6 +8,9 @@ interface PromptInput {
   userName: string
 }
 
+/** Stops listed in the prompt; get_trip returns the rest. Keeps every turn's input small. */
+export const PROMPT_STOP_LIMIT = 40
+
 /** Short, trip-scoped instructions. The "Trip id", "Day N" and "[stop id]" lines are also what the test model reads. */
 export function buildTripPrompt({ tripId, trip, stops, userName }: PromptInput): string {
   const days = tripDays(trip.startDate, trip.endDate)
@@ -15,7 +18,7 @@ export function buildTripPrompt({ tripId, trip, stops, userName }: PromptInput):
     const { weekday, label } = formatDay(day)
     return `- Day ${i + 1}: ${day} (${weekday} ${label})`
   })
-  const stopLines = stops.map(({ recordId, data }) => {
+  const stopLines = stops.slice(0, PROMPT_STOP_LIMIT).map(({ recordId, data }) => {
     const n = days.indexOf(data.day) + 1
     return `- [${recordId}] Day ${n} ${data.day}${data.time ? ` ${data.time}` : ''}: ${data.title}${data.source === 'ai' ? ' (added by AI)' : ''}`
   })
@@ -31,11 +34,13 @@ export function buildTripPrompt({ tripId, trip, stops, userName }: PromptInput):
     ...dayLines,
     'Stops now:',
     ...(stopLines.length ? stopLines : ['- (none yet)']),
+    ...(stops.length > PROMPT_STOP_LIMIT ? [`- ...and ${stops.length - PROMPT_STOP_LIMIT} more. Call get_trip to see them.`] : []),
     '',
     'How to work:',
     '- Be short and practical: a few bullets, no filler. Ask one question if the request is unclear.',
     '- Use this trip id in every tool call and only the days listed above (YYYY-MM-DD).',
-    '- Look up real places with search_places before naming specific venues. Search once per request; never invent ratings or addresses.',
+    '- Look up real places with search_places before naming specific venues. One new search per message; never invent ratings or addresses.',
+    '- When search_places returns source "openstreetmap", end your reply with: Place data © OpenStreetMap contributors.',
     '- Use get_forecast for weather. It covers about 16 days ahead.',
     '- Change the board only with add_stop, move_stop and remove_stop. Everyone on the trip sees changes live.',
     '- Confirm before removing more than one stop. If a tool refuses, say so plainly and do not retry the same call.',

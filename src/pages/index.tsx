@@ -9,6 +9,10 @@ import { PRODUCT_NAME } from '../constants'
 import { seo } from '../seo'
 
 const FEATURES = [
+  {
+    title: 'An AI co-planner that knows your trip',
+    body: 'Ask it for places or the weather and it adds stops everyone sees. It can only do what you can do on the trip.',
+  },
   { title: 'A column per day', body: 'Every day of the trip gets its own column. Add, edit and reorder stops in place.' },
   { title: 'Live with your group', body: 'Changes show up for everyone at once, and you can see who is looking at which day.' },
   { title: 'Weather on each day', body: 'The 16-day forecast appears on each day as soon as your dates come into range.' },
@@ -43,8 +47,8 @@ export default function Landing() {
               Plan the trip together, one day at a time.
             </h1>
             <p className="mt-5 max-w-lg text-lg text-muted-foreground">
-              Tripboard gives your group one shared board for the whole trip. Invite friends with a link and build the
-              itinerary side by side.
+              Tripboard gives your group one shared board for the whole trip. Invite friends with a link, build the
+              itinerary side by side, and ask the AI co-planner to find places and fill in the days.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
@@ -53,7 +57,9 @@ export default function Landing() {
               >
                 Start planning
               </Link>
-              <span className="self-center text-sm text-muted-foreground">Sign in with Google. Free.</span>
+              <span className="self-center text-sm text-muted-foreground">
+                Sign in with Google. Free. Then try the sample trip in one click.
+              </span>
             </div>
           </section>
 
@@ -77,7 +83,7 @@ export default function Landing() {
         </main>
 
         <section className="border-t border-border bg-card/50">
-          <ul className="mx-auto grid max-w-6xl gap-8 px-6 py-14 sm:grid-cols-3">
+          <ul className="mx-auto grid max-w-6xl gap-8 px-6 py-14 sm:grid-cols-2 lg:grid-cols-4">
             {FEATURES.map(({ title, body }) => (
               <li key={title}>
                 <h2 className="text-base font-semibold text-foreground">{title}</h2>

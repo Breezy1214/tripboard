@@ -8,11 +8,13 @@
  *   POST   /api/ai/chat        — streamed assistant turn (the big one)
  *
  * Every turn is owner-billed with claude-haiku-5-5 chosen here (a client
- * modelId is ignored), and is reserved against the caller's daily chat cap and
- * the app-wide credit ceiling before the model runs.
+ * modelId is ignored), is reserved against the caller's daily cap and the
+ * app-wide credit ceiling before the model runs, and is settled to its
+ * measured token cost when it ends. Input is bounded (message length, history,
+ * tool results, tool steps), so the cost of one turn is bounded too.
  *
  * Lives in its own file so worker.ts can stay small and the streaming
- * handler's full context (compaction, tools, persistence, abort handling)
+ * handler's full context (history bounds, tools, persistence, abort handling)
  * is co-located rather than scattered through the entry file.
  */
 
@@ -21,14 +23,11 @@ import { createUIMessageStreamResponse, isStepCount, streamText, toUIMessageStre
 import {
   AgentToolError,
   deepSpaceAgentErrorSummary,
-  prepareMessagesWithCompaction,
   resolveDeepSpaceAgentModel,
   streamDeepSpaceAgent,
   turnsToCoreMessages,
   buildUiParts,
-  makeDefaultSummarizer,
   createUserToolExecutor,
-  DEFAULT_CONTEXT_CONFIG,
   getChat,
   updateChat,
   deleteChatCascade,
@@ -39,15 +38,17 @@ import {
 import type { ActionTools, AgentToolAccessResult, AgentToolRouteOptions, ChatTurn } from 'deepspace/worker'
 import { createActionTools } from '../server/action-routes.js'
 import { memberTrip } from '../server/board-services.js'
-import { mocksExternalApis, reservePaidCall } from '../server/trip-services.js'
-import { CHAT_MESSAGES, chatErrorText } from './errors.js'
+import { chatTurnCredits, mocksExternalApis, reservePaidCall, settlePaidCall } from '../server/trip-services.js'
+import { CHAT_MESSAGE_MAX_LENGTH, CHAT_MESSAGES, chatErrorText } from './errors.js'
 import { buildTripPrompt } from './prompt.js'
 import { createTestChatModel } from './test-model.js'
+import { boundHistory, chatTools, MAX_OUTPUT_TOKENS, MAX_TOOL_CALLS } from './bounds.js'
 import { loadTripContext } from './tools.js'
 // Type-only — TypeScript strips these at runtime, so no circular import
 // with worker.ts (which imports `registerAiChatRoutes` from this file).
 import type { Env, AppContext } from '../../worker.js'
 
+type TokenUsage = { inputTokens?: number; outputTokens?: number }
 type ResolveAccess = (req: Request, env: Env) => Promise<AgentToolAccessResult>
 type AccessGrant = Extract<AgentToolAccessResult, { ok: true }>
 /** `buildTools` from src/ai/tools.ts; it may ignore the context argument. */
@@ -61,9 +62,6 @@ function recordRoomStub(env: Env): DurableObjectStub {
 }
 
 const CHAT_MODEL_ID = 'claude-haiku-5-5'
-/** Bounds one turn's spend: tool steps, effort and reply length. */
-const MAX_TOOL_CALLS = 8
-const MAX_OUTPUT_TOKENS = 1024
 
 /** The caller's chat row with its trip, or null when it is missing or someone else's. */
 async function getTripChat(tools: ActionTools, chatId: string, userId: string): Promise<{ tripId: string } | null> {
@@ -76,10 +74,6 @@ async function findTripChat(tools: ActionTools, userId: string, tripId: string):
   const res = await tools.query('ai-chats', { where: { userId, tripId }, limit: 1 })
   return res.success ? (res.data.records[0]?.recordId ?? null) : null
 }
-
-// Cap on user-supplied content length. Far above any realistic message;
-// blocks accidental DoS via megabyte payloads.
-const MAX_USER_CONTENT_LENGTH = 100_000
 
 // Derive a chat title from the first user message — first non-empty line,
 // trimmed to ~50 chars with an ellipsis.
@@ -190,8 +184,8 @@ export function registerAiChatRoutes(
       return c.json({ error: 'userMessageId is required' }, 400)
     if (typeof content !== 'string' || content.trim() === '')
       return c.json({ error: 'content is required' }, 400)
-    if (content.length > MAX_USER_CONTENT_LENGTH) {
-      return c.json({ error: `content exceeds ${MAX_USER_CONTENT_LENGTH} chars` }, 413)
+    if (content.length > CHAT_MESSAGE_MAX_LENGTH) {
+      return c.json({ error: `Keep messages under ${CHAT_MESSAGE_MAX_LENGTH} characters.`, code: 'too_long' }, 413)
     }
     // Owner-billed, so the server picks the model; a client modelId is ignored.
     const selectedModel = resolveDeepSpaceAgentModel(CHAT_MODEL_ID, 'application')
@@ -225,7 +219,7 @@ export function registerAiChatRoutes(
     // assistant as separate DO operations; the ordering is intentional, but
     // it is not atomic.
     const history = await loadMessages(stub, chatId, auth.userId)
-    // Carry `parts` through so compaction can truncate stale tool results AND
+    // Carry `parts` through so boundHistory can truncate stale tool results AND
     // turnsToCoreMessages can rebuild assistant tool-call/tool-result pairs.
     const rawTurns: ChatTurn[] = history.map((m) => ({
       id: m.recordId,
@@ -250,25 +244,6 @@ export function registerAiChatRoutes(
       turns.push(allTurns[i])
     }
 
-    const cachedSummary =
-      chat.compactedSummary && chat.compactedThroughId
-        ? { text: chat.compactedSummary, throughId: chat.compactedThroughId }
-        : undefined
-
-    // Owner-billed like the chat turn itself, so users never pay.
-    const summarizer = makeDefaultSummarizer(c.env)
-    const { messages: prepared, newSummary } = await prepareMessagesWithCompaction(
-      turns,
-      DEFAULT_CONTEXT_CONFIG,
-      { summarizer, cachedSummary },
-    )
-    if (newSummary) {
-      await updateChat(stub, chatId, auth.userId, {
-        compactedSummary: newSummary.text,
-        compactedThroughId: newSummary.throughId,
-      })
-    }
-
     const usedModelId = selectedModel.modelId
     const diagnosticContext = {
       profile: 'application' as const,
@@ -277,14 +252,9 @@ export function registerAiChatRoutes(
     }
     const baseSystem = buildTripPrompt({ ...tripContext, userName: auth.claims.name || 'a traveler' })
 
-    // Compaction inserts at most one summary system message at index 0; fold
-    // it into the top-level `system` so we don't pass two system roles. Then
-    // convert the remaining ChatTurns into AI SDK ModelMessages — splitting
+    // Convert the bounded history into AI SDK ModelMessages, splitting
     // assistant rows into the assistant + paired tool messages the SDK expects.
-    const [first, ...rest] = prepared
-    const summary = first?.role === 'system' ? first : null
-    const systemText = summary ? `${baseSystem}\n\n${summary.content}` : baseSystem
-    const messages = turnsToCoreMessages(summary ? rest : prepared)
+    const messages = turnsToCoreMessages(boundHistory(turns))
 
     // The SDK executor runs each tool as the verified user, in the room the
     // access grant admitted them to, and forwards the route's abort signal, so
@@ -292,9 +262,12 @@ export function registerAiChatRoutes(
     // mid-stream. The local assistant routes use the same executor and
     // context, and streamDeepSpaceAgent caps each tool result for the model,
     // keeping both surfaces' tool behavior identical.
-    const tools = buildTools(
-      createUserToolExecutor(c.env, auth.userId, c.req.raw.signal, { room: access.room }),
-      { env: c.env, userId: auth.userId, request: c.req.raw },
+    const tools = chatTools(
+      buildTools(createUserToolExecutor(c.env, auth.userId, c.req.raw.signal, { room: access.room }), {
+        env: c.env,
+        userId: auth.userId,
+        request: c.req.raw,
+      }),
     )
 
     // Allocate the assistant row id BEFORE streaming starts so we can echo it
@@ -384,7 +357,7 @@ export function registerAiChatRoutes(
     }
 
     const streamOptions = {
-      instructions: systemText,
+      instructions: baseSystem,
       messages,
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -396,13 +369,20 @@ export function registerAiChatRoutes(
           `[ai-chat] stream error: ${deepSpaceAgentErrorSummary(error, diagnosticContext)}`,
         )
       },
-      onEnd: ({ text, responseMessages }: { text: string; responseMessages: unknown[] }) =>
-        persistTurn(text, responseMessages as ModelMessage[]),
-      // AI SDK skips `onEnd` on abort; keep the steps that did complete.
-      onAbort: ({ steps }: { steps: readonly { text: string; response: { messages: unknown[] } }[] }) => {
+      onEnd: async ({ text, responseMessages, totalUsage }: { text: string; responseMessages: unknown[]; totalUsage: TokenUsage }) => {
+        const credits = chatTurnCredits(totalUsage)
+        console.info(`[ai-chat] turn settled: ${totalUsage.inputTokens ?? 0} in, ${totalUsage.outputTokens ?? 0} out, ${credits} credits`)
+        await settlePaidCall(actionTools, reservation.usageId, credits)
+        await persistTurn(text, responseMessages as ModelMessage[])
+      },
+      // AI SDK skips `onEnd` on abort; keep the steps that did complete. A
+      // zero-step abort keeps the reserved estimate (the call may be billed).
+      onAbort: async ({ steps }: { steps: readonly { text: string; usage: TokenUsage; response: { messages: unknown[] } }[] }) => {
         const last = steps.at(-1)
         if (!last) return
-        return persistTurn(last.text, steps.flatMap((step) => step.response.messages) as ModelMessage[])
+        const total = (key: keyof TokenUsage) => steps.reduce((sum, step) => sum + (step.usage[key] ?? 0), 0)
+        await settlePaidCall(actionTools, reservation.usageId, chatTurnCredits({ inputTokens: total('inputTokens'), outputTokens: total('outputTokens') }))
+        await persistTurn(last.text, steps.flatMap((step) => step.response.messages) as ModelMessage[])
       },
     }
     // Playwright runs (MOCK_EXTERNAL_APIS) swap only the model for a scripted

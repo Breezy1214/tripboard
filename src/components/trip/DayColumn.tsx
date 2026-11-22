@@ -27,6 +27,8 @@ interface Props {
   hasLocation: boolean
   weather: DayWeatherData | undefined
   forecastLoad: ForecastLoad
+  onRetryForecast: () => void
+  nameFor: (userId: string) => string | undefined
   onFocusDay: (day: string) => void
   onMove: (day: string, index: number, direction: -1 | 1) => Promise<void>
   onSave: (stop: { recordId: string; data: Stop }, patch: Partial<Stop>) => Promise<void>
@@ -45,6 +47,8 @@ export function DayColumn({
   hasLocation,
   weather,
   forecastLoad,
+  onRetryForecast,
+  nameFor,
   onFocusDay,
   onMove,
   onSave,
@@ -96,7 +100,7 @@ export function DayColumn({
             </div>
           )}
         </div>
-        <DayWeather day={day} today={today} hasLocation={hasLocation} weather={weather} load={forecastLoad} />
+        <DayWeather day={day} today={today} hasLocation={hasLocation} weather={weather} load={forecastLoad} onRetry={onRetryForecast} />
       </header>
 
       <ol className="flex flex-1 flex-col gap-2">
@@ -113,6 +117,7 @@ export function DayColumn({
             canWrite={canWrite}
             isFirst={i === 0}
             isLast={i === stops.length - 1}
+            nameFor={nameFor}
             onMove={(direction) => onMove(day, i, direction)}
             onSave={(patch) => onSave(stop, patch)}
             onDelete={() => onDelete(stop.recordId)}

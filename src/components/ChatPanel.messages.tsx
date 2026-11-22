@@ -85,7 +85,7 @@ export function EmptyState({
           How can I help?
         </h2>
         <p className="text-[13px] leading-relaxed text-muted-foreground">
-          I can inspect collections and help update records using your permissions.
+          Ask about the weather, find places, or have me add, move or remove stops. Everyone on the trip sees the changes.
         </p>
       </div>
       <div className="flex flex-col gap-0.5 pt-2">
@@ -211,8 +211,23 @@ function ToolRow({ invocation }: { invocation: ToolInvocation }) {
       )}
       {failed && <span className="text-destructive">Failed</span>}
       {!done && <EllipsisDots />}
+      {done && isOpenStreetMapResult(invocation.result) && (
+        <a
+          href="https://www.openstreetmap.org/copyright"
+          target="_blank"
+          rel="noreferrer"
+          data-testid="osm-attribution"
+          className="shrink-0 text-[11.5px] text-muted-foreground underline hover:text-foreground"
+        >
+          © OpenStreetMap contributors
+        </a>
+      )}
     </div>
   )
+}
+
+function isOpenStreetMapResult(result: unknown): boolean {
+  return typeof result === 'object' && result !== null && 'source' in result && result.source === 'openstreetmap'
 }
 
 function isFailedResult(result: unknown): boolean {

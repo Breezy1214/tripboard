@@ -143,7 +143,7 @@ test('the server picks the model; a client modelId is ignored', async ({ users }
   }
 })
 
-test('out of credits and over-cap turns show a clear message and the board keeps working', async ({ users }) => {
+test('an out-of-credits turn shows a clear message and the board keeps working', async ({ users }) => {
   const [alex] = await users(1)
   let tripId: string | undefined
   try {
@@ -156,16 +156,7 @@ test('out of credits and over-cap turns show a clear message and the board keeps
       timeout: 20_000,
     })
 
-    await alex.page.route('**/api/ai/chat', (route) =>
-      route.fulfill({
-        status: 429,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'You have used your AI turns for today. They reset at midnight UTC. The board still works.', code: 'user_cap' }),
-      }),
-    )
-    await ask(alex.page, 'one more')
-    await expect(chat.getByTestId('chat-error')).toContainText('You have used your AI turns for today', { timeout: 20_000 })
-    await expect(chat.getByTestId('chat-error').getByRole('button', { name: 'Retry' })).toHaveCount(0)
+    // The over-cap refusal is a real server 429 in harden.spec.ts.
 
     const day1 = alex.page.getByTestId('day-column').first()
     await day1.getByTestId('add-stop-button').click()

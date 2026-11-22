@@ -39,7 +39,7 @@ export default defineConfig({
     // responses and fails setup with its own clear error at the timeout.
     url: `${BASE_URL}/api/auth/ok`,
     reuseExistingServer: false,
-    env: { TRIPBOARD_MOCK_EXTERNAL: '1' },
+    env: { TRIPBOARD_MOCK_EXTERNAL: '1', TRIPBOARD_MOCK_RUN: String(Date.now()) },
     timeout: 60_000,
     stdout: 'pipe',
     stderr: 'pipe',

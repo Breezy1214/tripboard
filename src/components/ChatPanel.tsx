@@ -19,6 +19,7 @@ import { AlertCircle, ArrowUp, Square } from 'lucide-react'
 import { useQuery } from 'deepspace'
 import { EmptyState, MessageTurn, ThinkingIndicator } from './ChatPanel.messages'
 import { useStreamingChat } from './ChatPanel.stream'
+import { CHAT_MESSAGE_MAX_LENGTH } from '../ai/errors'
 
 type AiMessageData = {
   chatId: string
@@ -263,6 +264,7 @@ export function ChatPanel({
               ref={inputRef}
               rows={1}
               value={input}
+              maxLength={CHAT_MESSAGE_MAX_LENGTH}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               disabled={disabled}
@@ -272,7 +274,9 @@ export function ChatPanel({
             />
 
             <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-between">
-              <span className="px-2 text-[11px] text-muted-foreground/70">Claude Haiku</span>
+              <span className="px-2 text-[11px] text-muted-foreground/70">
+                {input.length > CHAT_MESSAGE_MAX_LENGTH - 200 ? `${input.length}/${CHAT_MESSAGE_MAX_LENGTH}` : 'Claude Haiku'}
+              </span>
 
               {isLoading ? (
                 <button

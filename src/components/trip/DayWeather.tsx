@@ -11,9 +11,10 @@ interface Props {
   hasLocation: boolean
   weather: DayWeatherData | undefined
   load: ForecastLoad
+  onRetry: () => void
 }
 
-export function DayWeather({ day, today, hasLocation, weather, load }: Props) {
+export function DayWeather({ day, today, hasLocation, weather, load, onRetry }: Props) {
   const status = forecastStatus(day, today)
   const base = 'flex min-h-6 items-center gap-1.5 text-xs text-muted-foreground'
 
@@ -41,6 +42,11 @@ export function DayWeather({ day, today, hasLocation, weather, load }: Props) {
         ) : (
           <>
             <CloudOff aria-hidden className="size-3.5" /> Weather unavailable
+            {load === 'error' && (
+              <button type="button" onClick={onRetry} className="font-medium text-primary hover:underline">
+                Retry
+              </button>
+            )}
           </>
         )}
       </div>
