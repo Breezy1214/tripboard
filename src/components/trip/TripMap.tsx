@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { LngLatBounds, Map as MapLibreMap, Marker, setWorkerUrl, type GeoJSONSource, type LngLatLike } from 'maplibre-gl'
-import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { Minus, Plus } from 'lucide-react'
 import type { LatLon } from '../../lib/geo'
