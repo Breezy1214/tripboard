@@ -1,12 +1,13 @@
 # Tripboard
 
-A shared trip planner built on [DeepSpace](https://docs.deep.space). A group plans one trip together on a live board with one column per day. An AI co-planner in the side panel looks up real places and the forecast and edits the board. It can only do what the person asking could do.
+A shared trip planner built on [DeepSpace](https://docs.deep.space). A group plans one trip together: the itinerary and an AI co-planner sit in two panels over a live map of the stops. The co-planner looks up real places and the forecast and edits the itinerary. It can only do what the person asking could do.
 
 **Live:** https://tripboard-app.app.space (sign in with Google or GitHub, then click "Try a sample trip")
 
 ## What it does
 
-- **Trips with a column per day.** Create a trip (name, destination, dates, up to 21 days). Add, edit, reorder and delete stops on each day, or move a stop to another day.
+- **An itinerary over a map.** Create a trip (name, destination, dates, up to 21 days). Days run down the itinerary panel (or a calendar view); add, edit, reorder and delete stops, or move one to another day. Stops with coordinates are numbered on the map in order, joined by a route line, with the distance between them in the itinerary.
+- **Built for phones too.** On a phone the map sits on top, the itinerary below it, and the co-planner opens as a bottom sheet.
 - **Live with your group.** Every edit shows up for every member at once. Avatars show who is online, and each day shows who is looking at it right now.
 - **Invite by link.** Any member can copy the trip's invite link. Opening it while signed in joins the trip.
 - **Weather on each day.** A 16-day Open-Meteo forecast appears on the days inside the window. Days further out say when their forecast opens.
@@ -48,7 +49,8 @@ One Cloudflare Worker (Hono) serves a Vite + React + Tailwind SPA and the API. A
 | Place search (SerpApi, OpenStreetMap fallback) | `src/server/places.ts` |
 | AI tools, prompt, chat route, bounds | `src/ai/tools.ts`, `prompt.ts`, `chat-routes.ts`, `bounds.ts` |
 | Presence and socket gates | `src/server/realtime-routes.ts` |
-| Trip board UI | `src/pages/(app)/(protected)/trips/[tripId].tsx`, `src/components/trip/` |
+| Trip page: map, itinerary and co-planner panels | `src/pages/(app)/(protected)/trips/[tripId].tsx`, `src/components/trip/` (`TripMap.tsx`, `DayColumn.tsx`, `TripChat.tsx`) |
+| App shell (sidebar) | `src/components/Navigation.tsx`, `src/components/shell/` |
 
 ### DeepSpace primitives used, and why
 
@@ -64,7 +66,7 @@ One Cloudflare Worker (Hono) serves a Vite + React + Tailwind SPA and the API. A
 | Integrations with `'developer'` billing | Geocoding, place search | Owner pays, the user never does, and calls run only in the worker. |
 | `deepspace/testing` `users([...])` fixture | Multi-user Playwright tests | Real sign-ins as separate accounts in separate browser contexts. |
 
-Not used on purpose: `YjsRoom` and `CanvasRoom` (records already sync per field), `JobRoom` and `CronRoom` (no background work yet), LiveKit, Stripe, email (an invite link does the job for free), maps.
+Not used on purpose: `YjsRoom` and `CanvasRoom` (records already sync per field), `JobRoom` and `CronRoom` (no background work yet), LiveKit, Stripe, email (an invite link does the job for free).
 
 ## Integrations and zero spend
 
@@ -77,6 +79,7 @@ The DeepSpace account is on the free tier: 500 one-time credits, no card on file
 | `serpapi/places-search` | Places with rating and address | 3.25 credits | `search_places` tool |
 | OpenStreetMap Nominatim | Free place search fallback | free | `search_places` tool |
 | Open-Meteo | 16-day daily forecast | free, no key | `refreshForecast` action and `get_forecast` tool |
+| OpenFreeMap (MapLibre GL) | Map tiles for the trip page | free, no key | the browser, credited on the map |
 
 How spend is kept at zero real money and bounded in credits:
 
@@ -173,5 +176,5 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 - "Plan the whole trip" as a `JobRoom` job whose progress every member watches.
 - A `CronRoom` task that sends members the forecast two days before the trip.
 - Member removal and invite rotation (the `removed` status already blocks rejoining).
-- Server-checked day moves for direct edits, drag and drop between days, a map of the stops.
+- Drag and drop between days, photos for stops (Wikimedia, free), place search from the map.
 - A daily cron to clear old `osm_slots` and `usage` rows.
