@@ -1,41 +1,32 @@
-/**
- * Example gated page. Reached at /settings — no auth logic lives here
- * because (protected)/_layout.tsx already wraps the subtree in <AuthGate>.
- */
-
 import { signOut, useUser } from 'deepspace'
-import { Button } from '@/components/ui'
+import { LogOut } from 'lucide-react'
+import { Avatar, AvatarFallback, AvatarImage, Button } from '@/components/ui'
 
 export default function SettingsPage() {
   const { user } = useUser()
 
   return (
-    // No background on page wrappers — pages render into whatever the app's
-    // (app)/_layout provides (a plain background, or a raised panel), so they
-    // stay transparent and inherit it.
-    <div className="min-h-full text-foreground">
-      <div className="mx-auto max-w-2xl px-6 py-20">
-        <h1 className="mb-12 text-4xl font-bold tracking-tight">Settings</h1>
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-8 sm:py-10">
+      <h1 className="text-[28px] font-semibold leading-tight tracking-tight text-foreground">Account</h1>
+      <p className="mt-1 text-sm text-muted-foreground">You sign in with Google or GitHub; your name and photo come from there.</p>
 
-        <section className="rounded-lg border border-border bg-card p-6">
-          <h2 className="mb-4 text-lg font-semibold">Your account</h2>
-
-          <dl className="space-y-3 text-sm">
-            <div>
-              <dt className="text-muted-foreground">Name</dt>
-              <dd className="text-foreground">{user?.name ?? '—'}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Email</dt>
-              <dd className="text-foreground">{user?.email ?? '—'}</dd>
-            </div>
+      <section className="mt-8 max-w-xl rounded-2xl border border-border bg-card p-6">
+        <div className="flex items-center gap-4">
+          <Avatar className="size-14 ring-1 ring-inset ring-border">
+            <AvatarImage src={user?.imageUrl ?? undefined} referrerPolicy="no-referrer" />
+            <AvatarFallback>{(user?.name?.[0] ?? user?.email?.[0] ?? '?').toUpperCase()}</AvatarFallback>
+          </Avatar>
+          <dl className="min-w-0 text-sm">
+            <dt className="sr-only">Name</dt>
+            <dd className="truncate text-base font-semibold text-foreground">{user?.name || 'No name set'}</dd>
+            <dt className="sr-only">Email</dt>
+            <dd className="truncate text-muted-foreground">{user?.email ?? 'No email'}</dd>
           </dl>
-
-          <Button variant="secondary" className="mt-6" onClick={() => signOut()}>
-            Sign out
-          </Button>
-        </section>
-      </div>
+        </div>
+        <Button variant="outline" className="mt-6" onClick={() => signOut()}>
+          <LogOut aria-hidden /> Sign out
+        </Button>
+      </section>
     </div>
   )
 }

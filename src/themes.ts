@@ -18,9 +18,14 @@
 
 export const THEMES = [
   {
+    id: 'pine',
+    label: 'Pine',
+    description: 'Tripboard default: cool paper, white panels, a deep pine accent.',
+  },
+  {
     id: 'atlas',
     label: 'Atlas',
-    description: 'Tripboard default: warm paper with a deep teal accent.',
+    description: 'Warm paper with a deep teal accent.',
   },
   {
     id: 'slate',

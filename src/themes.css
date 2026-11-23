@@ -73,3 +73,31 @@
   --color-shell: #f7f5f0;
   --color-shell-panel: #ffffff;
 }
+
+[data-theme="pine"] {
+  color-scheme: light;
+  --color-background: #f6f7f5;
+  --color-foreground: #0e1a15;
+  --color-card: #ffffff;
+  --color-card-foreground: #0e1a15;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0e1a15;
+  --color-primary: #0f4c3a;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #eef1ee;
+  --color-secondary-foreground: #0e1a15;
+  --color-muted: #eef1ee;
+  --color-muted-foreground: #66716c;
+  --color-accent: #e3f0ea;
+  --color-accent-foreground: #0f4c3a;
+  --color-destructive: #b42318;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e4e8e5;
+  --color-input: #dce1dd;
+  --color-ring: #0f4c3a;
+  --radius: 0.75rem;
+  --shadow-card: 0 1px 2px 0 rgba(14, 26, 21, 0.04);
+  --shadow-card-hover: 0 8px 24px -8px rgba(14, 26, 21, 0.12);
+  --color-shell: #f6f7f5;
+  --color-shell-panel: #ffffff;
+}
