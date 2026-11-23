@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AuthOverlay, useAuth } from 'deepspace'
 import { Button } from '@/components/ui'
+import { CenteredCard } from '../../../components/shell/CenteredCard'
 import { callAction, rememberInvite, takePendingInvite } from '../../../lib/actions'
 
 export default function JoinPage() {
@@ -27,10 +28,10 @@ export default function JoinPage() {
   }, [isLoaded, isSignedIn, code, navigate])
 
   return (
-    <div data-testid="join-page" className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
+    <CenteredCard testId="join-page">
       {!isLoaded ? null : !isSignedIn ? (
         <>
-          <h1 className="text-xl font-semibold text-foreground">You are invited to a trip</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">You are invited to a trip</h1>
           <p className="mt-2 text-sm text-muted-foreground">Sign in to join the board and plan together.</p>
           <Button className="mt-6 w-full" onClick={() => setShowSignIn(true)}>
             Sign in to join
@@ -39,11 +40,11 @@ export default function JoinPage() {
         </>
       ) : error ? (
         <>
-          <h1 className="text-xl font-semibold text-foreground">Could not join</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">Could not join</h1>
           <p role="alert" className="mt-2 text-sm text-muted-foreground">
             {error}
           </p>
-          <Link to="/home" className="mt-6 text-sm font-medium text-primary hover:underline">
+          <Link to="/home" className="mt-6 inline-block text-sm font-medium text-primary hover:underline">
             Back to your trips
           </Link>
         </>
@@ -52,6 +53,6 @@ export default function JoinPage() {
           Joining the trip...
         </p>
       )}
-    </div>
+    </CenteredCard>
   )
 }
