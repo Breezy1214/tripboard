@@ -75,12 +75,12 @@ const createTrip: ActionHandler<Env> = async ({ userId, params, tools, env }) =>
   return { success: true, data: { tripId: result.data.tripId, located: !!place, geocodeSkipped } }
 }
 
-const SAMPLE_STOPS: Array<{ offset: number; title: string; time?: string; notes?: string }> = [
-  { offset: 0, title: 'Check in near Baixa', time: '15:00' },
-  { offset: 0, title: 'Sunset at Miradouro da Senhora do Monte', time: '19:30' },
-  { offset: 1, title: 'Tram 28 to Alfama', time: '09:30', notes: 'Board early at Martim Moniz to get a seat.' },
-  { offset: 1, title: 'Lunch at Time Out Market', time: '13:00' },
-  { offset: 2, title: 'Day trip to Sintra', time: '08:45', notes: 'Train from Rossio, about 40 minutes.' },
+const SAMPLE_STOPS: Array<{ offset: number; title: string; time?: string; notes?: string; lat: number; lon: number }> = [
+  { offset: 0, title: 'Check in near Baixa', time: '15:00', lat: 38.7106, lon: -9.1377 },
+  { offset: 0, title: 'Sunset at Miradouro da Senhora do Monte', time: '19:30', lat: 38.7193, lon: -9.1325 },
+  { offset: 1, title: 'Tram 28 to Alfama', time: '09:30', notes: 'Board early at Martim Moniz to get a seat.', lat: 38.7163, lon: -9.1361 },
+  { offset: 1, title: 'Lunch at Time Out Market', time: '13:00', lat: 38.7069, lon: -9.1459 },
+  { offset: 2, title: 'Day trip to Sintra', time: '08:45', notes: 'Train from Rossio, about 40 minutes.', lat: 38.7976, lon: -9.3904 },
 ]
 
 const createSampleTrip: ActionHandler<Env> = async ({ userId, tools, env }) => {
@@ -105,6 +105,8 @@ const createSampleTrip: ActionHandler<Env> = async ({ userId, tools, env }) => {
       title: stop.title,
       time: stop.time ?? '',
       notes: stop.notes ?? '',
+      lat: stop.lat,
+      lon: stop.lon,
       source: 'user',
     })
   }

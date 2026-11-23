@@ -203,7 +203,7 @@ export function ChatPanel({
 
   return (
     <div
-      className={`relative flex h-full min-h-0 flex-col bg-background text-foreground ${textSize} ${className ?? ''}`}
+      className={`relative flex h-full min-h-0 flex-col bg-card text-foreground ${textSize} ${className ?? ''}`}
     >
       {header && <div className="shrink-0">{header}</div>}
 
@@ -213,7 +213,7 @@ export function ChatPanel({
         aria-live="polite"
         aria-atomic="false"
         aria-label="Assistant conversation"
-        className={`min-h-0 flex-1 overflow-y-auto ${horizontalPadding} py-8`}
+        className={`min-h-0 flex-1 overflow-y-auto ${horizontalPadding} py-5`}
       >
         {messages.length === 0 ? (
           <EmptyState prompts={emptyStatePrompts} onPick={selectPrompt} />
@@ -251,7 +251,7 @@ export function ChatPanel({
         </div>
       )}
 
-      <div className={`shrink-0 border-t border-border/60 ${horizontalPadding} pb-4 pt-3`}>
+      <div className={`shrink-0 ${horizontalPadding} pb-3 pt-2`}>
         <form
           onSubmit={(event) => {
             event.preventDefault()
@@ -259,7 +259,7 @@ export function ChatPanel({
           }}
           className="mx-auto w-full max-w-[44rem]"
         >
-          <div className="relative rounded-2xl border border-border bg-background transition-colors focus-within:border-foreground/25 focus-within:ring-4 focus-within:ring-foreground/[0.04]">
+          <div className="relative rounded-2xl border border-border bg-background shadow-[0_1px_2px_rgba(14,26,21,0.04)] transition-colors focus-within:border-foreground/25 focus-within:ring-4 focus-within:ring-foreground/[0.04]">
             <textarea
               ref={inputRef}
               rows={1}
@@ -268,14 +268,14 @@ export function ChatPanel({
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               disabled={disabled}
-              placeholder={disabled ? 'Connecting…' : 'Ask the co-planner…'}
+              placeholder={disabled ? 'Connecting…' : 'Ask about places, weather or plans…'}
               aria-label="Message the co-planner"
               className="block w-full resize-none bg-transparent px-4 pt-3 pb-12 leading-[1.5] text-foreground placeholder:text-muted-foreground/60 outline-none disabled:cursor-not-allowed"
             />
 
             <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-between">
               <span className="px-2 text-[11px] text-muted-foreground/70">
-                {input.length > CHAT_MESSAGE_MAX_LENGTH - 200 ? `${input.length}/${CHAT_MESSAGE_MAX_LENGTH}` : 'Claude Haiku'}
+                {input.length > CHAT_MESSAGE_MAX_LENGTH - 200 ? `${input.length}/${CHAT_MESSAGE_MAX_LENGTH}` : ''}
               </span>
 
               {isLoading ? (
@@ -292,7 +292,7 @@ export function ChatPanel({
                   type="submit"
                   disabled={!canSend}
                   aria-label="Send message"
-                  className="pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all hover:opacity-90 disabled:bg-muted disabled:text-muted-foreground/60 disabled:cursor-not-allowed"
+                  className="pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background transition-all hover:opacity-90 disabled:bg-muted disabled:text-muted-foreground/60 disabled:cursor-not-allowed"
                 >
                   <ArrowUp className="h-4 w-4" aria-hidden="true" />
                 </button>
@@ -300,6 +300,9 @@ export function ChatPanel({
             </div>
           </div>
         </form>
+        <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+          The co-planner can get things wrong. Check before you go.
+        </p>
       </div>
     </div>
   )

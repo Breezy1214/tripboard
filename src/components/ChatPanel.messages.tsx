@@ -38,7 +38,7 @@ export const MessageTurn = memo(function MessageTurn({
   if (role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 leading-relaxed text-foreground whitespace-pre-wrap break-words">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-foreground px-3.5 py-2 leading-relaxed text-background whitespace-pre-wrap break-words">
           {content}
         </div>
       </div>
@@ -58,7 +58,7 @@ export const MessageTurn = memo(function MessageTurn({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 rounded-2xl rounded-tl-md border border-border bg-background px-3.5 py-3">
       {orderedParts.map((part, index) => {
         if (part.type === 'text') {
           if (!part.text) return null
@@ -79,28 +79,22 @@ export function EmptyState({
   onPick: (prompt: string) => void
 }) {
   return (
-    <div className="mx-auto flex h-full max-w-[28rem] flex-col items-start justify-center gap-4 px-2">
-      <div className="space-y-1">
-        <h2 className="text-[17px] font-medium tracking-tight text-foreground">
-          How can I help?
-        </h2>
+    <div className="flex h-full flex-col justify-end gap-4 px-1 pb-2">
+      <div className="space-y-1.5">
+        <h2 className="text-[17px] font-semibold tracking-tight text-foreground">Plan it with the co-planner</h2>
         <p className="text-[13px] leading-relaxed text-muted-foreground">
-          Ask about the weather, find places, or have me add, move or remove stops. Everyone on the trip sees the changes.
+          It reads this trip, finds real places and checks the forecast. Ask it to add, move or remove stops, and everyone on the trip sees the change.
         </p>
       </div>
-      <div className="flex flex-col gap-0.5 pt-2">
-        <div className="pb-1 text-[10.5px] font-medium tracking-[0.08em] uppercase text-muted-foreground">
-          Try
-        </div>
+      <div className="flex flex-wrap gap-1.5">
         {prompts.map((prompt) => (
           <button
             key={prompt}
             type="button"
             onClick={() => onPick(prompt)}
-            className="group flex items-center gap-2 py-1 text-left text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+            className="rounded-full border border-border bg-background px-3 py-1.5 text-left text-[12.5px] text-foreground transition-colors hover:border-primary/40 hover:bg-accent"
           >
-            <span className="h-px w-3 shrink-0 bg-border transition-colors group-hover:bg-muted-foreground" />
-            <span className="truncate">{prompt}</span>
+            {prompt}
           </button>
         ))}
       </div>

@@ -43,8 +43,12 @@ export function CreateTripForm({ onCancel }: Props) {
     <form
       onSubmit={submit}
       data-testid="create-trip-form"
-      className="grid gap-4 rounded-xl border border-border bg-card p-5 shadow-card sm:grid-cols-2"
+      className="grid gap-4 rounded-2xl border border-border bg-card p-5 shadow-[0_16px_40px_-24px_rgba(14,26,21,0.35)] sm:grid-cols-2 sm:p-6"
     >
+      <div className="sm:col-span-2">
+        <h2 className="text-base font-semibold tracking-tight text-foreground">Plan a new trip</h2>
+        <p className="mt-0.5 text-[13px] text-muted-foreground">Up to {MAX_TRIP_DAYS} days. Invite people once it exists.</p>
+      </div>
       <div className="grid gap-1.5 sm:col-span-2">
         <Label htmlFor="trip-name">Trip name</Label>
         <Input

@@ -1,23 +1,28 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, useMutations, usePresenceRoom, useQuery, useUser, type RecordData } from 'deepspace'
-import { ArrowLeft, CalendarDays, MapPin, RotateCw, Sparkles, Trash2, WifiOff } from 'lucide-react'
+import { ChevronsRight, ListTree, RotateCw, Sparkles, WifiOff } from 'lucide-react'
 import { Button, ConfirmModal, useToast } from '@/components/ui'
+import { cn } from '@/lib/utils'
+import { CalendarView } from '../../../../components/trip/CalendarView'
 import { DayColumn, type Viewer } from '../../../../components/trip/DayColumn'
 import type { ForecastLoad } from '../../../../components/trip/DayWeather'
-import { InviteButton } from '../../../../components/trip/InviteButton'
-import { PersonAvatar } from '../../../../components/trip/PersonAvatar'
+import type { MapPadding, MapPoint } from '../../../../components/trip/TripMap'
+import { TripTopBar, type Person } from '../../../../components/trip/TripTopBar'
 import { callAction } from '../../../../lib/actions'
-import { formatDay, formatRange, todayIso, tripDays, tripOverlapsForecast } from '../../../../lib/trip-dates'
+import { hasCoords } from '../../../../lib/geo'
+import { formatDay, todayIso, tripDays, tripOverlapsForecast } from '../../../../lib/trip-dates'
+import { useMediaQuery } from '../../../../lib/use-media-query'
 import type { Stop, TeamMember, Trip } from '../../../../types'
 
 const FORECAST_TTL_MS = 60 * 60 * 1000
 
-// The chat brings markdown and code highlighting; load it after the board.
+// The chat brings markdown and code highlighting, the map brings WebGL; load both after the board.
 const TripChat = lazy(() => import('../../../../components/trip/TripChat').then((m) => ({ default: m.TripChat })))
+const TripMap = lazy(() => import('../../../../components/trip/TripMap'))
 
-function wideScreen() {
-  return typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+function startWithChatOpen() {
+  return typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches
 }
 
 export default function TripPage() {
@@ -37,12 +42,10 @@ function TripLoader({ tripId, onRetry }: { tripId: string; onRetry: () => void }
 
   if (status === 'loading') {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8" aria-busy="true">
-        <div className="h-8 w-64 animate-pulse rounded bg-muted" />
-        <div className="mt-6 flex gap-4 overflow-hidden">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="h-72 w-72 shrink-0 animate-pulse rounded-xl border border-border bg-card" />
-          ))}
+      <div className="flex h-full flex-col" aria-busy="true">
+        <div className="h-14 border-b border-border bg-card" />
+        <div className="map-fallback relative flex-1">
+          <div className="absolute bottom-4 right-4 top-4 hidden w-[400px] animate-pulse rounded-2xl border border-border bg-card lg:block" />
         </div>
       </div>
     )
@@ -50,7 +53,7 @@ function TripLoader({ tripId, onRetry }: { tripId: string; onRetry: () => void }
 
   if (status === 'error') {
     return (
-      <div role="alert" data-testid="trip-error" className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
+      <div role="alert" data-testid="trip-error" className="mx-auto flex max-w-md flex-col items-center px-6 py-24 text-center">
         <h1 className="text-lg font-semibold text-foreground">Could not load this trip</h1>
         <p className="mt-2 text-sm text-muted-foreground">{error ?? 'The connection failed.'}</p>
         <Button className="mt-6" onClick={onRetry}>
@@ -61,7 +64,7 @@ function TripLoader({ tripId, onRetry }: { tripId: string; onRetry: () => void }
   }
 
   return (
-    <div data-testid="trip-not-found" className="mx-auto flex max-w-md flex-col items-center px-6 py-20 text-center">
+    <div data-testid="trip-not-found" className="mx-auto flex max-w-md flex-col items-center px-6 py-24 text-center">
       <h1 className="text-lg font-semibold text-foreground">Trip not found</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         It may have been deleted, or you are not a member. Ask someone on the trip for an invite link.
@@ -83,12 +86,19 @@ function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => v
   const membersQuery = useQuery<TeamMember>('team_members', { where: { teamId: tripId } })
   const { ready, putConfirmed, removeConfirmed } = useMutations<Stop>('stops')
   const { peers, connected, updateState } = usePresenceRoom(`trip:${tripId}`)
+  const wide = useMediaQuery('(min-width: 1024px)')
+  const xl = useMediaQuery('(min-width: 1280px)')
   const [viewDay, setViewDay] = useState<string | null>(null)
   const [forecastLoad, setForecastLoad] = useState<ForecastLoad>('idle')
   const [forecastAttempt, setForecastAttempt] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [chatOpen, setChatOpen] = useState(wideScreen)
+  const [chatOpen, setChatOpen] = useState(startWithChatOpen)
+  const [planOpen, setPlanOpen] = useState(true)
+  const [tab, setTab] = useState<'itinerary' | 'calendar'>('itinerary')
+  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(() => new Set())
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const today = todayIso()
   const { startDate, endDate, lat, lon, forecast, forecastAt } = trip.data
@@ -123,6 +133,20 @@ function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => v
     }
     return map
   }, [stopsQuery.records])
+
+  const mapPoints = useMemo(() => {
+    const points: MapPoint[] = []
+    for (const day of days) {
+      for (const stop of stopsByDay.get(day) ?? []) {
+        if (hasCoords(stop.data)) {
+          points.push({ id: stop.recordId, lat: stop.data.lat, lon: stop.data.lon, label: String(points.length + 1), title: stop.data.title })
+        }
+      }
+    }
+    return points
+  }, [days, stopsByDay])
+  const mapLabels = useMemo(() => new Map(mapPoints.map((p) => [p.id, p.label])), [mapPoints])
+  const stopCounts = useMemo(() => new Map(days.map((d) => [d, stopsByDay.get(d)?.length ?? 0])), [days, stopsByDay])
 
   const uniquePeers = useMemo(() => {
     const seen = new Map<string, (typeof peers)[number]>()
@@ -160,6 +184,31 @@ function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => v
 
   const onlineIds = new Set(uniquePeers.map((p) => p.userId))
 
+  function viewingLabel(day: unknown) {
+    if (typeof day !== 'string') return 'on the trip'
+    const { weekday, label } = formatDay(day)
+    return `looking at ${weekday} ${label}`
+  }
+
+  const others: Person[] = members
+    .filter((m) => m.data.userId !== userId)
+    .map((m) => {
+      const info = people.get(m.data.userId)
+      const peer = uniquePeers.find((p) => p.userId === m.data.userId)
+      const name = info?.name || peer?.userName || 'Trip member'
+      const online = onlineIds.has(m.data.userId)
+      return {
+        userId: m.data.userId,
+        name,
+        imageUrl: info?.imageUrl,
+        online,
+        title: online ? `${name} is ${viewingLabel(peer?.state.day)}` : `${name} (away)`,
+      }
+    })
+
+  const presenceSummary =
+    uniquePeers.length === 0 ? 'Only you here' : `${uniquePeers.map((p) => p.userName || 'Someone').join(', ')} here now`
+
   async function move(day: string, index: number, direction: -1 | 1) {
     const order = [...(stopsByDay.get(day) ?? [])]
     const target = index + direction
@@ -187,150 +236,239 @@ function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => v
     }
   }
 
-  function viewingLabel(day: unknown) {
-    if (typeof day !== 'string') return 'on the trip'
-    const { weekday, label } = formatDay(day)
-    return `looking at ${weekday} ${label}`
+  function toggleDay(day: string) {
+    setCollapsedDays((prev) => {
+      const next = new Set(prev)
+      if (next.has(day)) next.delete(day)
+      else next.add(day)
+      return next
+    })
   }
 
+  function openDay(day: string) {
+    setTab('itinerary')
+    setPlanOpen(true)
+    setCollapsedDays((prev) => {
+      const next = new Set(prev)
+      next.delete(day)
+      return next
+    })
+    requestAnimationFrame(() => document.getElementById(`day-${day}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
+
+  function selectStop(stopId: string) {
+    setSelectedStopId(stopId)
+    const stop = stopsQuery.records.find((s) => s.recordId === stopId)
+    if (stop && collapsedDays.has(stop.data.day)) toggleDay(stop.data.day)
+    setPlanOpen(true)
+    setTab('itinerary')
+    requestAnimationFrame(() =>
+      listRef.current?.querySelector(`[data-stop-id="${stopId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+    )
+  }
+
+  const chatWidth = xl ? 380 : 340
+  const planWidth = xl ? 420 : 360
+  const mapPadding: MapPadding = wide
+    ? {
+        top: 32,
+        bottom: 32,
+        left: chatOpen ? chatWidth + 48 : 32,
+        right: planOpen ? planWidth + 48 : 32,
+      }
+    : { top: 28, bottom: 56, left: 28, right: 64 }
+  const mapChrome = wide ? { right: planOpen ? planWidth + 32 : 16, bottom: 6 } : { right: 10, bottom: 26 }
+
+  const totalStops = stopsQuery.records.length
+
   return (
-    <div className="flex min-h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-border bg-background/80 px-4 py-4 sm:px-6">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <Link to="/home" className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-                <ArrowLeft aria-hidden className="size-3" /> All trips
-              </Link>
-              <h1 data-testid="trip-name" className="truncate text-2xl font-semibold tracking-tight text-foreground">
-                {trip.data.name}
-              </h1>
-              <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5">
-                  <MapPin aria-hidden className="size-3.5" /> {trip.data.placeLabel || trip.data.destination}
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <CalendarDays aria-hidden className="size-3.5" /> {formatRange(startDate, endDate)}
-                </span>
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <div data-testid="trip-members" className="flex items-center -space-x-2">
-                {userId && (
-                  <PersonAvatar userId={userId} name={user?.name || 'You'} imageUrl={user?.imageUrl} title="You" />
-                )}
-                {members
-                  .filter((m) => m.data.userId !== userId)
-                  .map((m) => {
-                    const info = people.get(m.data.userId)
-                    const peer = uniquePeers.find((p) => p.userId === m.data.userId)
-                    const name = info?.name || peer?.userName || 'Trip member'
-                    const online = onlineIds.has(m.data.userId)
-                    return (
-                      <PersonAvatar
-                        key={m.recordId}
-                        userId={m.data.userId}
-                        name={name}
-                        imageUrl={info?.imageUrl}
-                        dimmed={!online}
-                        title={online ? `${name} is ${viewingLabel(peer?.state.day)}` : `${name} (away)`}
-                      />
-                    )
-                  })}
-              </div>
-              <span data-testid="presence-summary" className="text-xs text-muted-foreground">
-                {uniquePeers.length === 0
-                  ? 'Only you here'
-                  : `${uniquePeers.map((p) => p.userName || 'Someone').join(', ')} here now`}
-              </span>
-              <InviteButton tripId={tripId} />
-              {!chatOpen && (
-                <Button variant="outline" size="sm" className="hidden lg:inline-flex" onClick={() => setChatOpen(true)} data-testid="open-chat">
-                  <Sparkles aria-hidden /> Co-planner
-                </Button>
-              )}
-              {trip.createdBy === userId && (
-                <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)} aria-label="Delete trip">
-                  <Trash2 aria-hidden />
-                </Button>
-              )}
-            </div>
-          </div>
-          {!ready && (
-            <p role="status" data-testid="board-offline" className="mx-auto mt-3 flex max-w-7xl items-center gap-1.5 text-xs text-warning">
-              <WifiOff aria-hidden className="size-3.5" /> Reconnecting to the board. Editing is paused until it is live; nothing you typed is lost.
+    <div className="flex min-h-full flex-col lg:h-full">
+      <TripTopBar
+        tripId={tripId}
+        trip={trip.data}
+        you={userId ? { userId, name: user?.name || 'You', imageUrl: user?.imageUrl || undefined } : null}
+        others={others}
+        presenceSummary={presenceSummary}
+        memberCount={Math.max(members.length, 1)}
+        canDelete={trip.createdBy === userId}
+        onDelete={() => setConfirmDelete(true)}
+      />
+
+      <div className="relative flex flex-1 flex-col lg:min-h-0">
+        <div className="relative h-[38dvh] min-h-56 shrink-0 overflow-hidden lg:absolute lg:inset-0 lg:h-auto">
+          <Suspense fallback={<div className="map-fallback absolute inset-0" />}>
+            <TripMap
+              center={hasLocation ? { lat: lat as number, lon: lon as number } : null}
+              points={mapPoints}
+              padding={mapPadding}
+              chrome={mapChrome}
+              selectedId={selectedStopId}
+              onSelect={selectStop}
+            />
+          </Suspense>
+          {!hasLocation && (
+            <p className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
+              We could not place this destination on the map.
             </p>
           )}
-        </header>
-
-        {/* Bottom padding on phones lets the last stops scroll clear of the floating Co-planner button. */}
-        <div className="flex-1 snap-x snap-mandatory scroll-px-4 overflow-x-auto px-4 pb-24 pt-5 sm:scroll-px-6 sm:px-6 lg:pb-5">
-          {stopsQuery.status === 'error' ? (
-            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-destructive">
-              Could not load stops: {stopsQuery.error ?? 'connection failed'}.
-              <Button variant="outline" size="sm" onClick={onRetry}>
-                <RotateCw aria-hidden /> Try again
-              </Button>
-            </div>
-          ) : (
-            <div data-testid="trip-board" className="mx-auto flex max-w-7xl gap-4 pb-4">
-              {days.map((day, i) => (
-                <DayColumn
-                  key={day}
-                  tripId={tripId}
-                  day={day}
-                  index={i}
-                  days={days}
-                  today={today}
-                  stops={stopsByDay.get(day) ?? []}
-                  viewers={viewersByDay.get(day) ?? []}
-                  canWrite={ready && stopsQuery.status === 'ready'}
-                  hasLocation={hasLocation}
-                  weather={forecast?.days?.[day]}
-                  forecastLoad={forecastLoad === 'idle' && needsForecast ? 'loading' : forecastLoad}
-                  onRetryForecast={() => setForecastAttempt((n) => n + 1)}
-                  nameFor={nameFor}
-                  onFocusDay={setViewDay}
-                  onMove={move}
-                  onSave={save}
-                  onDelete={(id) => removeConfirmed(id)}
-                />
-              ))}
-            </div>
-          )}
-          <p className="mx-auto max-w-7xl text-xs text-muted-foreground">
-            Weather data by{' '}
-            <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
-              Open-Meteo.com
-            </a>
-          </p>
         </div>
 
-        <ConfirmModal
-          open={confirmDelete}
-          onClose={() => setConfirmDelete(false)}
-          title="Delete this trip?"
-          description="All days, stops and invite links are removed for every member. This cannot be undone."
-          confirmText="Delete trip"
-          loading={deleting}
-          onConfirm={deleteTrip}
-        />
+        {wide && !chatOpen && (
+          <button
+            type="button"
+            onClick={() => setChatOpen(true)}
+            data-testid="open-chat"
+            className="absolute left-4 top-4 z-10 inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-[13px] font-medium text-foreground shadow-[0_8px_24px_-12px_rgba(14,26,21,0.35)] hover:bg-secondary"
+          >
+            <Sparkles aria-hidden className="size-4 text-primary" /> Co-planner
+          </button>
+        )}
+        {wide && !planOpen && (
+          <button
+            type="button"
+            onClick={() => setPlanOpen(true)}
+            className="absolute right-4 top-4 z-10 inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-[13px] font-medium text-foreground shadow-[0_8px_24px_-12px_rgba(14,26,21,0.35)] hover:bg-secondary"
+          >
+            <ListTree aria-hidden className="size-4 text-primary" /> Itinerary
+          </button>
+        )}
+
+        <section
+          aria-label="Itinerary"
+          className={cn(
+            'relative z-10 -mt-5 flex flex-1 flex-col rounded-t-3xl border-t border-border bg-card pb-24',
+            'lg:absolute lg:bottom-4 lg:right-4 lg:top-4 lg:mt-0 lg:rounded-2xl lg:border lg:pb-0 lg:shadow-[0_16px_40px_-20px_rgba(14,26,21,0.35)]',
+            'lg:w-[360px] xl:w-[420px]',
+            wide && !planOpen && 'hidden',
+          )}
+        >
+          <span aria-hidden className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-border lg:hidden" />
+          <div className="px-5 pb-3 pt-4">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <h1 data-testid="trip-name" className="text-xl font-semibold leading-tight tracking-tight text-foreground">
+                  {trip.data.name}
+                </h1>
+                <p className="mt-1 text-[13px] text-muted-foreground">
+                  {days.length} {days.length === 1 ? 'day' : 'days'}, {totalStops} {totalStops === 1 ? 'stop' : 'stops'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPlanOpen(false)}
+                aria-label="Hide itinerary"
+                className="hidden size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground lg:inline-flex"
+              >
+                <ChevronsRight aria-hidden className="size-4" />
+              </button>
+            </div>
+            <div role="tablist" aria-label="Trip views" className="mt-4 flex gap-5 border-b border-border">
+              {(['itinerary', 'calendar'] as const).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === id}
+                  onClick={() => setTab(id)}
+                  className={cn(
+                    '-mb-px border-b-2 pb-2 text-[13px] font-medium capitalize transition-colors',
+                    tab === id ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+            {!ready && (
+              <p role="status" data-testid="board-offline" className="mt-3 flex items-center gap-1.5 rounded-lg bg-warning/10 px-2.5 py-1.5 text-xs text-foreground">
+                <WifiOff aria-hidden className="size-3.5 shrink-0 text-warning" /> Reconnecting. Editing is paused until the board is live; nothing you typed is lost.
+              </p>
+            )}
+          </div>
+
+          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
+            {stopsQuery.status === 'error' ? (
+              <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-destructive">
+                Could not load stops: {stopsQuery.error ?? 'connection failed'}.
+                <Button variant="outline" size="sm" onClick={onRetry}>
+                  <RotateCw aria-hidden /> Try again
+                </Button>
+              </div>
+            ) : tab === 'calendar' ? (
+              <CalendarView days={days} today={today} stopCounts={stopCounts} forecast={forecast} onPick={openDay} />
+            ) : (
+              <div data-testid="trip-board" className="flex flex-col gap-6 pt-1">
+                {days.map((day, i) => (
+                  <DayColumn
+                    key={day}
+                    tripId={tripId}
+                    day={day}
+                    index={i}
+                    days={days}
+                    today={today}
+                    stops={stopsByDay.get(day) ?? []}
+                    viewers={viewersByDay.get(day) ?? []}
+                    canWrite={ready && stopsQuery.status === 'ready'}
+                    hasLocation={hasLocation}
+                    weather={forecast?.days?.[day]}
+                    forecastLoad={forecastLoad === 'idle' && needsForecast ? 'loading' : forecastLoad}
+                    collapsed={collapsedDays.has(day)}
+                    mapLabels={mapLabels}
+                    selectedStopId={selectedStopId}
+                    onToggle={() => toggleDay(day)}
+                    onRetryForecast={() => setForecastAttempt((n) => n + 1)}
+                    nameFor={nameFor}
+                    onFocusDay={setViewDay}
+                    onSelectStop={selectStop}
+                    onMove={move}
+                    onSave={save}
+                    onDelete={(id) => removeConfirmed(id)}
+                  />
+                ))}
+              </div>
+            )}
+            <p className="mt-6 text-[11px] text-muted-foreground">
+              Weather data by{' '}
+              <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
+                Open-Meteo.com
+              </a>
+            </p>
+          </div>
+        </section>
+
+        {userId && (
+          <Suspense fallback={null}>
+            <TripChat
+              tripId={tripId}
+              userId={userId}
+              open={chatOpen}
+              onClose={() => setChatOpen(false)}
+              className="lg:absolute lg:inset-x-auto lg:bottom-4 lg:left-4 lg:top-4 lg:z-20 lg:h-auto lg:w-[340px] lg:rounded-2xl lg:shadow-[0_16px_40px_-20px_rgba(14,26,21,0.35)] xl:w-[380px]"
+            />
+          </Suspense>
+        )}
       </div>
-      {userId && (
-        <Suspense fallback={null}>
-          <TripChat tripId={tripId} userId={userId} open={chatOpen} onClose={() => setChatOpen(false)} />
-        </Suspense>
-      )}
+
       {!chatOpen && (
         <button
           type="button"
           onClick={() => setChatOpen(true)}
           data-testid="open-chat-fab"
-          className="fixed bottom-5 right-5 z-20 inline-flex items-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-lg lg:hidden"
+          className="fixed bottom-5 right-5 z-20 inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-3 text-sm font-medium text-background shadow-lg lg:hidden"
         >
           <Sparkles aria-hidden className="size-4" /> Co-planner
         </button>
       )}
+
+      <ConfirmModal
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="Delete this trip?"
+        description="All days, stops and invite links are removed for every member. This cannot be undone."
+        confirmText="Delete trip"
+        loading={deleting}
+        onConfirm={deleteTrip}
+      />
     </div>
   )
 }
