@@ -23,6 +23,17 @@ test.describe('API tests', () => {
     expect(res.status()).toBe(401)
   })
 
+  test('only the app record room and trip presence rooms are reachable', async ({ request }) => {
+    const ws = { headers: { Upgrade: 'websocket' } }
+    for (const path of ['/ws/app:someone-else', '/ws/random', '/ws/yjs/doc1', '/ws/canvas/c1', '/ws/jobs/j1', '/ws/cron/c1', '/ws/presence/lobby']) {
+      expect((await request.get(path, ws)).status(), path).toBe(404)
+    }
+  })
+
+  test('action moveStop requires sign-in', async ({ request }) => {
+    expect((await request.post('/api/actions/moveStop', { data: {} })).status()).toBe(401)
+  })
+
   test('WebSocket endpoint exists', async ({ page }) => {
     // /home is a dynamic page (under src/pages/(app)/), so mounting it boots
     // the providers and auto-connects the records WebSocket. The static

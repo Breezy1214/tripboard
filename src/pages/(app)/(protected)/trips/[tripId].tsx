@@ -171,14 +171,9 @@ function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => v
   }
 
   async function save(stop: { recordId: string; data: Stop }, patch: Partial<Stop>) {
-    const next: Partial<Stop> = { ...patch }
-    if (patch.day && patch.day !== stop.data.day) {
-      const targetStops = stopsByDay.get(patch.day) ?? []
-      next.position = Math.max(0, ...targetStops.map((s) => s.data.position ?? 0)) + 1
-    } else {
-      delete next.day
-    }
-    await putConfirmed(stop.recordId, next)
+    const { day, ...fields } = patch
+    await putConfirmed(stop.recordId, fields)
+    if (day && day !== stop.data.day) await callAction('moveStop', { tripId, stopId: stop.recordId, day })
   }
 
   async function deleteTrip() {

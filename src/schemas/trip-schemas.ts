@@ -40,7 +40,8 @@ const stopMemberPermissions: RolePermissions = {
   create: false,
   update: 'team',
   delete: 'team',
-  writableFields: ['day', 'position', 'title', 'notes', 'time'],
+  // `day` changes go through the moveStop action, which checks the day is inside the trip.
+  writableFields: ['position', 'title', 'notes', 'time'],
 }
 
 export const stopsSchema: CollectionSchema = {

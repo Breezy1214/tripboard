@@ -231,3 +231,25 @@ test('a third user joins through the invite link and sees the trip', async ({ us
     await deleteTrip(alex.page, tripId)
   }
 })
+
+test('a stop can only move to a day inside its trip', async ({ users }) => {
+  const [alex] = await users(1)
+  let tripId: string | undefined
+  try {
+    await alex.page.goto('/home')
+    tripId = await createTrip(alex.page, 'Day rules', { startInDays: 2, length: 3 })
+    const added = await action(alex.page, 'addStop', { tripId, day: isoInDays(2), title: 'Movable stop' })
+    const stopId = (added.body.data as { stopId: string }).stopId
+
+    const direct = await recordSocketWrite(alex.page, { op: 'put', collection: 'stops', recordId: stopId, data: { day: isoInDays(30) } })
+    expect(direct).toMatchObject({ success: false })
+
+    const outside = await action(alex.page, 'moveStop', { tripId, stopId, day: isoInDays(30) })
+    expect(outside.body).toMatchObject({ success: false, error: 'That day is outside the trip' })
+
+    const inside = await action(alex.page, 'moveStop', { tripId, stopId, day: isoInDays(3) })
+    expect(inside.body).toMatchObject({ success: true, data: { stopId, day: isoInDays(3), position: 1 } })
+  } finally {
+    await deleteTrip(alex.page, tripId)
+  }
+})
