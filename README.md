@@ -33,7 +33,7 @@ npx deepspace dev kill       # stop it
 Local dev calls the real integrations, owner-billed and capped (see [Spend](#integrations-and-zero-spend)). Tests never do.
 
 ```sh
-npm run validate                 # tsc + vitest (49 unit tests)
+npm run validate                 # tsc + vitest (50 unit tests)
 npx deepspace test run all       # unit tests + Playwright (40 e2e tests), every external call mocked
 npx deepspace test screenshot    # screenshots for a UI check
 ```
@@ -74,7 +74,7 @@ Not used on purpose: `YjsRoom` and `CanvasRoom` (records already sync per field)
 
 ## Integrations and zero spend
 
-The DeepSpace account is on the free tier: 500 one-time credits, no card on file. Real money cannot be spent. Development so far has used about 0.5 credits.
+The DeepSpace account is on the free tier: 500 one-time credits, no card on file. Real money cannot be spent. Development so far has used about 1.2 credits.
 
 | Service | Used for | Cost | Where it runs |
 |---|---|---|---|
@@ -139,7 +139,7 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 
 ## Tests
 
-- **Unit (vitest, 49):** caps under parallel bursts (per user, app ceiling, place ceiling, trip quota), settling to real cost, tool membership refusals that write nothing, move and reorder, place cache and per-request limit, OSM fallback, out-of-credits detection, prompt and history bounds, integration parsers, trip dates, prerender.
+- **Unit (vitest, 50):** caps under parallel bursts (per user, app ceiling, place ceiling, trip quota), settling to real cost, tool membership refusals that write nothing, move and reorder, time-ordered inserts, map placement matching, place cache and per-request limit, OSM fallback, out-of-credits detection, prompt and history bounds, integration parsers, trip dates, prerender.
 - **End to end (Playwright, 40, all external calls mocked):**
   - Board flow: create, add, edit, reorder, delete.
   - Two members see each other live, with presence per day.
@@ -157,6 +157,7 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 - **Creates only through actions.** More code than `create: true`, but it is the only way to stop cross-trip writes, because `create` cannot be row-checked.
 - **AI writes use privileged tools plus explicit checks**, not the caller's RBAC executor. That lets the tools validate days and assign positions, and create stops at all. The cost: correctness depends on `board-services.ts`, so every path there checks membership first, and tests cover non-members.
 - **Caps favor refusing.** Insert-then-count can refuse a call during a burst that a lock would have allowed. It never lets one through past a cap. Settled chat costs run high (about 1.9x billed) on purpose.
+- **Map placement from titles.** Free and keyless, but a guess. A result has to share a real word with the title, so a title like "Dinner" stays off the map instead of pinning a random restaurant.
 - **Places quality.** SerpApi gives ratings, but the platform account is out of searches. OpenStreetMap is free and works, without ratings and with sparser coverage. The SerpApi parser follows the documented response shape and has not seen a live response.
 - **Chat memory.** No summarizer keeps each turn cheap and bounded. Long chats forget their oldest turns.
 - **Private chats.** Each member's co-planner chat is their own. Only its board edits are shared.
@@ -167,13 +168,12 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 
 - Manual pass on the live app with three sessions, including a phone, and a fresh Google sign-in as a reviewer would do it.
 - Local agent demo against the live app with a board open.
-- Client stop edits over the socket can set a day outside the trip (the server's day check covers actions and AI tools only).
-- Unused scaffold socket routes (Yjs, canvas) accept any room id.
-- Chat: out-of-credits errors show a Retry button that spends a turn; history flashes the empty state before loading; its load error says "reload" instead of retrying in place.
-- Duplicate form ids when two stop editors are open on the same day. Sign-in from the landing page takes three clicks.
+- Map placement is a best guess: it needs a real place word in the title, can pick a same-named place within about 15 km, and a renamed stop keeps its old pin when the new title is not found.
+- Time order applies when a stop is added. Editing a time later does not reorder the day (the arrows do).
 - No e2e coverage yet for AI move and remove through the chat, or for using another user's chat id.
-- `osm_slots` keeps one row per OpenStreetMap search (bounded by caps), with no cleanup.
-- No way to remove a member or rotate an invite link.
+- `osm_slots` keeps one row per OpenStreetMap request (bounded by caps), with no cleanup.
+- No way to remove a member, leave a trip or rotate an invite link.
+- The main JS chunk is about 490 KB (about 150 KB gzipped). The landing page is prerendered HTML, so it paints before the JS loads; the map and chat load after the board.
 
 ## What is next
 
