@@ -2,12 +2,16 @@
 
 A shared trip planner built on [DeepSpace](https://docs.deep.space). A group plans one trip together: the itinerary and an AI co-planner sit in two panels over a live map of the stops. The co-planner looks up real places and the forecast and edits the itinerary. It can only do what the person asking could do.
 
-**Live:** https://tripboard-app.app.space (sign in with Google or GitHub, then click "Try a sample trip")
+**Live:** https://tripboard-app.app.space (click "Start planning", sign in with Google or GitHub, then "Try a sample trip")
+
+![Trip page: co-planner, live map and itinerary, with a second member looking at Day 2](docs/trip-desktop.png)
 
 ## What it does
 
-- **An itinerary over a map.** Create a trip (name, destination, dates, up to 21 days). Days run down the itinerary panel (or a calendar view); add, edit, reorder and delete stops, or move one to another day. Stops with coordinates are numbered on the map in order, joined by a route line, with the distance between them in the itinerary.
+- **An itinerary over a map.** Create a trip (name, destination, dates, up to 21 days). Days run down the itinerary panel (or a calendar view); add, edit, reorder and delete stops, or move one to another day. Stops are numbered on the map in day order, joined by a route line, with the distance between them in the itinerary. A stop you type in ("Lunch at Time Out Market") is placed on the map by a free OpenStreetMap lookup near the trip; a title with no place in it ("Dinner") stays off the map.
 - **Built for phones too.** On a phone the map sits on top, the itinerary below it, and the co-planner opens as a bottom sheet.
+
+  <img src="docs/trip-phone.png" alt="Trip page on a phone" width="260">
 - **Live with your group.** Every edit shows up for every member at once. Avatars show who is online, and each day shows who is looking at it right now.
 - **Invite by link.** Any member can copy the trip's invite link. Opening it while signed in joins the trip.
 - **Weather on each day.** A 16-day Open-Meteo forecast appears on the days inside the window. Days further out say when their forecast opens.
@@ -29,8 +33,8 @@ npx deepspace dev kill       # stop it
 Local dev calls the real integrations, owner-billed and capped (see [Spend](#integrations-and-zero-spend)). Tests never do.
 
 ```sh
-npm run validate                 # tsc + vitest (43 unit tests)
-npx deepspace test run all       # unit tests + Playwright (36 e2e tests), every external call mocked
+npm run validate                 # tsc + vitest (49 unit tests)
+npx deepspace test run all       # unit tests + Playwright (40 e2e tests), every external call mocked
 npx deepspace test screenshot    # screenshots for a UI check
 ```
 
@@ -46,7 +50,7 @@ One Cloudflare Worker (Hono) serves a Vite + React + Tailwind SPA and the API. A
 | Server actions (privileged writes) | `src/actions/index.ts` |
 | Membership checks, board writes | `src/server/board-services.ts` |
 | Spend caps, geocoding, forecast | `src/server/trip-services.ts` |
-| Place search (SerpApi, OpenStreetMap fallback) | `src/server/places.ts` |
+| Place search (SerpApi, OpenStreetMap fallback), placing stops on the map | `src/server/places.ts` |
 | AI tools, prompt, chat route, bounds | `src/ai/tools.ts`, `prompt.ts`, `chat-routes.ts`, `bounds.ts` |
 | Presence and socket gates | `src/server/realtime-routes.ts` |
 | Trip page: map, itinerary and co-planner panels | `src/pages/(app)/(protected)/trips/[tripId].tsx`, `src/components/trip/` (`TripMap.tsx`, `DayColumn.tsx`, `TripChat.tsx`) |
@@ -59,7 +63,7 @@ One Cloudflare Worker (Hono) serves a Vite + React + Tailwind SPA and the API. A
 | `RecordRoom` collections, `useQuery` / `useMutations` | Trips, stops, members, chats | Live sync to every open tab with no hand-written WebSockets. RBAC runs in the Durable Object before anything is broadcast. |
 | `'team'` permission level, `teamField`, a `team_members` collection | Trip membership | The platform resolves "is this caller on this trip" per row, so the board, the AI's reads and the socket all share one rule. |
 | `immutable`, `userBound`, `writableFields`, `uniqueOn` | Write integrity | A member cannot move a stop into another trip, fake `addedBy`, or write the cached forecast. |
-| Server actions (`/api/actions/<name>`) | Creating trips, stops, invites, joining, deleting, forecast refresh | Caller identity comes from the verified JWT. Each action checks membership and validates input before writing. |
+| Server actions (`/api/actions/<name>`) | Creating trips, stops, invites, joining, deleting, moving a stop to another day, placing a stop on the map, forecast refresh | Caller identity comes from the verified JWT. Each action checks membership and validates input before writing. |
 | `usePresenceRoom('trip:<id>')` | Avatars and "looking at Day N" | Ephemeral, sub-second, identity from the JWT. Nothing stored. |
 | `add ai-chat`: `ChatPanel`, `streamDeepSpaceAgent`, saved history | The co-planner | Streaming, tool calls and persistence come from the SDK. Changed for billing, caps and per-trip scope (below). |
 | `registerAgent` + `buildTools` | One tool set for the in-app chat and local agents | Same code, same checks on both surfaces. |
@@ -77,7 +81,7 @@ The DeepSpace account is on the free tier: 500 one-time credits, no card on file
 | DeepSpace AI, `claude-haiku-5-5` | Co-planner turns | Token-priced, a real turn costs about 0.08 credits | `POST /api/ai/chat` |
 | `openweathermap/geocoding` | Destination to coordinates, once per trip | about 0.2 credits | `createTrip` action |
 | `serpapi/places-search` | Places with rating and address | 3.25 credits | `search_places` tool |
-| OpenStreetMap Nominatim | Free place search fallback | free | `search_places` tool |
+| OpenStreetMap Nominatim | Free place search fallback; placing hand-added stops on the map | free | `search_places` tool, `locateStop` action |
 | Open-Meteo | 16-day daily forecast | free, no key | `refreshForecast` action and `get_forecast` tool |
 | OpenFreeMap (MapLibre GL) | Map tiles for the trip page | free, no key | the browser, credited on the map |
 
@@ -87,7 +91,7 @@ How spend is kept at zero real money and bounded in credits:
 - **Server picks the model.** The chat route forces `claude-haiku-5-5` and ignores any client `modelId` (tested).
 - **Worker only, behind sign-in.** The scaffold's browser integration proxy (`/api/integrations/:name/:endpoint`) returns 403. Paid calls run only inside actions and tools.
 - **Atomic caps** (`reservePaidCall` in `src/server/trip-services.ts`). Every paid call first inserts its own row in the admin-only `usage` collection, then counts. Over a cap, it removes its row and refuses. Parallel calls can over-refuse but never over-grant. A failed write or count refuses (fail closed). Unit tests fire 50-call bursts through a fake room with random interleaving.
-- **Caps per UTC day.** Per user: 15 chat turns, 3 new place searches, 10 geocodes, 20 trips. App-wide: 40 credits across all paid calls, 20 of them for place searches. At 40 a day the free credits last at least 12 days even if every cap is hit.
+- **Caps per UTC day.** Per user: 15 chat turns, 3 new place searches, 10 geocodes, 20 trips, 60 map lookups (free, but polite to OpenStreetMap). App-wide: 40 credits across all paid calls, 20 of them for place searches. At 40 a day the free credits last at least 12 days even if every cap is hit.
 - **Bounded chat turns** (`src/ai/bounds.ts`). Messages up to 2,000 characters, history window 8,000 characters, 4 tool calls, 1,024 output tokens per step, tool results capped at 4,000 characters, 40 stops in the prompt, no summarizer (no hidden second call). Each turn reserves 1.5 credits, its bounded worst case. When it ends, the row is settled to its token cost at prices set above what was billed (one measured turn: settled 0.155, billed 0.080).
 - **One new place search per message.** Repeats are cached per trip and query.
 - **Free fallback.** The platform's SerpApi account is out of searches, so SerpApi currently fails with a 429 and its charge is released. Search then falls back to Nominatim, bounded to about 15 km around the trip, one request per second app-wide, cached, credited "© OpenStreetMap contributors".
@@ -102,7 +106,7 @@ How spend is kept at zero real money and bounded in credits:
 
 **What members can write directly** (over the socket, checked in the Durable Object):
 
-- Stops: `day`, `position`, `title`, `notes`, `time`. `tripId` and `addedBy` are immutable.
+- Stops: `position`, `title`, `notes`, `time`. A day change goes through the `moveStop` action, which checks the day is inside the trip. Coordinates are server-written. `tripId` and `addedBy` are immutable.
 - Trips: `name` only. Coordinates and the cached forecast are server-written.
 - Nothing else. `team_members`, `trip_invites`, `usage`, place caches, AI chats and messages are worker-written. Chat history is model input, so members cannot edit it.
 
@@ -135,8 +139,8 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 
 ## Tests
 
-- **Unit (vitest, 43):** caps under parallel bursts (per user, app ceiling, place ceiling, trip quota), settling to real cost, tool membership refusals that write nothing, move and reorder, place cache and per-request limit, OSM fallback, out-of-credits detection, prompt and history bounds, integration parsers, trip dates, prerender.
-- **End to end (Playwright, 36, all external calls mocked):**
+- **Unit (vitest, 49):** caps under parallel bursts (per user, app ceiling, place ceiling, trip quota), settling to real cost, tool membership refusals that write nothing, move and reorder, place cache and per-request limit, OSM fallback, out-of-credits detection, prompt and history bounds, integration parsers, trip dates, prerender.
+- **End to end (Playwright, 40, all external calls mocked):**
   - Board flow: create, add, edit, reorder, delete.
   - Two members see each other live, with presence per day.
   - An excluded user cannot read, create, update or delete over the socket, the tools, the actions or presence.

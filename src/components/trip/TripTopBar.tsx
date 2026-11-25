@@ -1,4 +1,3 @@
-import { cn } from '@/lib/utils'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from 'deepspace'
 import { CalendarDays, Check, ChevronDown, MapPin, MoreHorizontal, Plus, Trash2, Users } from 'lucide-react'
@@ -83,8 +82,7 @@ export function TripTopBar({ tripId, trip, you, others, presenceSummary, memberC
         </ul>
 
         <div className="ml-auto flex items-center gap-2">
-          {/* On phones the stack shows only once someone else is on the trip. */}
-          <div className={cn('items-center gap-2', others.length > 0 ? 'flex' : 'hidden sm:flex')}>
+          <div className="hidden items-center gap-2 sm:flex">
             <div data-testid="trip-members" className="flex items-center -space-x-2">
               {you && <PersonAvatar userId={you.userId} name={you.name} imageUrl={you.imageUrl} title="You" />}
               {others.map((p) => (

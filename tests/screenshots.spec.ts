@@ -120,15 +120,16 @@ test('docs screenshots', async ({ users }) => {
     const day2 = page.getByTestId('day-column').nth(1)
     await day2.getByTestId('add-stop-button').click()
     await day2.getByLabel('Title').fill('Pasteis de Belem')
-    await day2.getByLabel('Time').fill('11:00')
     await day2.getByRole('button', { name: 'Add stop' }).click()
     await day2.getByRole('button', { name: 'Show Pasteis de Belem on the map' }).waitFor({ timeout: 20_000 })
 
     await blair.page.setViewportSize(DESKTOP)
     await blair.page.goto(`/trips/${tripId}`)
     await blair.page.getByTestId('day-column').nth(1).hover()
-    await page.getByTestId('day-viewers').first().waitFor({ timeout: 20_000 })
+    await page.reload()
+    await page.getByTestId('stop-card').first().waitFor()
     await page.mouse.move(700, 450)
+    await page.getByTestId('day-viewers').first().waitFor({ timeout: 20_000 })
     await page.waitForTimeout(4000)
     await page.screenshot({ path: `${DOCS}/trip-desktop.png` })
 
