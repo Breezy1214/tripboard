@@ -33,8 +33,8 @@ npx deepspace dev kill       # stop it
 Local dev calls the real integrations, owner-billed and capped (see [Spend](#integrations-and-zero-spend)). Tests never do.
 
 ```sh
-npm run validate                 # tsc + vitest (50 unit tests)
-npx deepspace test run all       # unit tests + Playwright (40 e2e tests), every external call mocked
+npm run validate                 # tsc + vitest (51 unit tests)
+npx deepspace test run all       # unit tests + Playwright (41 e2e tests), every external call mocked
 npx deepspace test screenshot    # screenshots for a UI check
 ```
 
@@ -139,13 +139,13 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 
 ## Tests
 
-- **Unit (vitest, 50):** caps under parallel bursts (per user, app ceiling, place ceiling, trip quota), settling to real cost, tool membership refusals that write nothing, move and reorder, time-ordered inserts, map placement matching, place cache and per-request limit, OSM fallback, out-of-credits detection, prompt and history bounds, integration parsers, trip dates, prerender.
-- **End to end (Playwright, 40, all external calls mocked):**
+- **Unit (vitest, 51):** caps under parallel bursts (per user, app ceiling, place ceiling, trip quota), settling to real cost, tool membership refusals that write nothing, move and reorder, time-ordered inserts, map placement matching, place cache and per-request limit, OSM fallback, out-of-credits detection, prompt and history bounds, integration parsers, trip dates, prerender.
+- **End to end (Playwright, 41, all external calls mocked):**
   - Board flow: create, add, edit, reorder, delete.
   - Two members see each other live, with presence per day.
   - An excluded user cannot read, create, update or delete over the socket, the tools, the actions or presence.
   - Invite join, bad invite link.
-  - AI-added stop appears live for another member with the badge.
+  - AI-added stop appears live for another member with the badge; AI move and remove through the chat.
   - Non-member chat and tool refusal, server-picked model.
   - Out-of-credits and real server cap 429s (chat and places).
   - OSM fallback with attribution.
@@ -170,7 +170,7 @@ The stop appears on every open board with the AI badge. Local agents get the rea
 - Local agent demo against the live app with a board open.
 - Map placement is a best guess: it needs a real place word in the title, can pick a same-named place within about 15 km, and a renamed stop keeps its old pin when the new title is not found.
 - Time order applies when a stop is added. Editing a time later does not reorder the day (the arrows do).
-- No e2e coverage yet for AI move and remove through the chat, or for using another user's chat id.
+- No e2e coverage yet for using another user's chat id.
 - `osm_slots` keeps one row per OpenStreetMap request (bounded by caps), with no cleanup.
 - No way to remove a member, leave a trip or rotate an invite link.
 - The main JS chunk is about 490 KB (about 150 KB gzipped). The landing page is prerendered HTML, so it paints before the JS loads; the map and chat load after the board.

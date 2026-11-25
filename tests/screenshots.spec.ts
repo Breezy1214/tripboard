@@ -139,10 +139,6 @@ test('docs screenshots', async ({ users }) => {
     await page.waitForTimeout(4000)
     await page.screenshot({ path: `${DOCS}/trip-phone.png` })
 
-    await page.setViewportSize(DESKTOP)
-    await page.goto('/')
-    await page.waitForTimeout(1500)
-    await page.screenshot({ path: `${DOCS}/landing.png` })
   } finally {
     await deleteTrip(alex.page, tripId)
   }
