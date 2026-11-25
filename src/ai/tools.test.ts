@@ -67,6 +67,16 @@ describe('co-planner tools', () => {
     expect([pos(breakfast), pos(lunch), pos(free)]).toEqual([1, 2, 3])
   })
 
+  it('renumbers a day with gaps in its positions', async () => {
+    const day = addDays(START, 2)
+    const a = await fake.tools.create('stops', { tripId: TRIP, day, title: 'Tram', time: '09:30', position: 3 })
+    const b = await fake.tools.create('stops', { tripId: TRIP, day, title: 'Lunch', time: '13:00', position: 4 })
+    const added = (await toolsFor('alex')('add_stop')({ tripId: TRIP, day, title: 'Bakery' })) as { stopId: string }
+    const pos = (id: string) => fake.table('stops').get(id)!.data.position
+    if (!a.success || !b.success) throw new Error('seed failed')
+    expect([pos(a.data.recordId), pos(b.data.recordId), pos(added.stopId)]).toEqual([1, 2, 3])
+  })
+
   it('refuses every write from a non-member and writes nothing', async () => {
     await toolsFor('alex')('add_stop')({ tripId: TRIP, day: START, title: 'Coffee' })
     const stopId = [...fake.table('stops').keys()][0]

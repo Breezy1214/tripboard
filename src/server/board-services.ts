@@ -90,8 +90,9 @@ export async function addStopFor(tools: ActionTools, userId: string, input: Stop
   // A timed stop goes before the first later-timed stop of the day; an untimed one goes last.
   const later = time ? onDay.findIndex((s) => !!s.data.time && s.data.time > time) : -1
   const index = later === -1 ? onDay.length : later
-  for (const [i, s] of onDay.slice(index).entries()) {
-    const position = index + i + 2
+  // Renumber the day 1..n around the new stop (sample and older rows may not be compact).
+  for (const [i, s] of onDay.entries()) {
+    const position = i < index ? i + 1 : i + 2
     if (s.data.position === position) continue
     const shifted = await tools.update('stops', s.recordId, { position })
     if (!shifted.success) return fail('failed', shifted.error)
