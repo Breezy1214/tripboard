@@ -44,7 +44,7 @@ export function InviteButton({ tripId }: { tripId: string }) {
       <Modal open={open} onClose={() => setOpen(false)} size="sm">
         <Modal.Header>
           <Modal.Title>Invite people to this trip</Modal.Title>
-          <Modal.Description>Anyone with this link can join after signing in.</Modal.Description>
+          <Modal.Description>Anyone with this link can join after signing in. Members edit the same board; each keeps a private co-planner chat.</Modal.Description>
         </Modal.Header>
         <Modal.Body>
           {loading ? (
@@ -52,8 +52,8 @@ export function InviteButton({ tripId }: { tripId: string }) {
           ) : link ? (
             <div className="flex gap-2">
               <Input data-testid="invite-link" readOnly value={link} onFocus={(e) => e.currentTarget.select()} />
-              <Button variant="secondary" onClick={copy} aria-label="Copy invite link">
-                {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+              <Button variant="secondary" onClick={copy} aria-label="Copy invite link" className="shrink-0">
+                {copied ? <Check aria-hidden /> : <Copy aria-hidden />} {copied ? 'Copied' : 'Copy'}
               </Button>
             </div>
           ) : null}
