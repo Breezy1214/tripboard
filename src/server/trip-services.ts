@@ -34,6 +34,8 @@ export const DAILY_CAPS = {
   places: 3,
   /** Per-user trips created per UTC day (free, but keeps the room tidy). */
   trip: 20,
+  /** Per-user free OpenStreetMap lookups that put hand-added stops on the map. */
+  locate: 60,
   /** App-wide credits per UTC day for place searches, inside appCredits. */
   placesCredits: 20,
   /** App-wide owner-billed credits per UTC day, across every paid kind. */
@@ -126,7 +128,7 @@ async function overCeiling(tools: ActionTools, day: string, cap: number, kinds: 
 }
 
 /** Counts one free, capped action (like creating a trip). False when the cap is reached. */
-export async function takeFreeQuota(env: Env, tools: ActionTools, userId: string, kind: 'trip'): Promise<boolean> {
+export async function takeFreeQuota(env: Env, tools: ActionTools, userId: string, kind: 'trip' | 'locate'): Promise<boolean> {
   const day = usageDay(env)
   const cap = capFor(env, DAILY_CAPS[kind])
   const { refusal } = await claimUsage(tools, { userId, day, kind, count: 1, credits: 0 }, async () =>

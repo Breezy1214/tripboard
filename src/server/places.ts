@@ -229,3 +229,59 @@ export async function searchPlaces(
   if (!saved.success && !/Duplicate/i.test(saved.error)) console.warn(`[places] cache write failed: ${saved.error}`)
   return { ok: true, places, cached: false, source }
 }
+
+/** Activity words that say what you do at a place, not which place it is. */
+const LOCATE_STOPWORDS = new Set(
+  'the and for with near from into onto visit visiting check lunch dinner breakfast brunch drinks coffee walk tour trip day night morning evening afternoon sunset sunrise stop see explore'.split(' '),
+)
+
+function placeTokens(value: string): string[] {
+  return value
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !LOCATE_STOPWORDS.has(t))
+}
+
+/**
+ * What to look up for a stop title: the title itself, then the part after
+ * "at", "to", "near" or "in" ("Lunch at Time Out Market" -> "Time Out Market").
+ * Titles with no place-like words ("Dinner") give nothing.
+ */
+export function locateQueries(title: string): string[] {
+  const clean = title.trim().replace(/\s+/g, ' ').slice(0, 120)
+  if (placeTokens(clean).length === 0) return []
+  const tail = /\b(?:at|to|near|in|@)\s+(.+)$/i.exec(clean)?.[1]?.trim()
+  return tail && tail !== clean && placeTokens(tail).length > 0 ? [clean, tail] : [clean]
+}
+
+/** A result counts only if it shares a real word with what was asked, so "Lunch" never pins a random café. */
+export function placeMatches(name: string, query: string): boolean {
+  const asked = new Set(placeTokens(query))
+  const shared = placeTokens(name).filter((t) => asked.has(t)).length
+  return shared >= (asked.size >= 3 ? 2 : 1)
+}
+
+/**
+ * Finds a stop title on the map with the free Nominatim search, bounded to
+ * about 15 km around the trip and sharing the app-wide 1 request per second.
+ * Callers check membership and the caller's daily quota first. Mocked runs
+ * place any title with a real word in it just off the trip centre.
+ */
+export async function locatePlace(
+  env: Env,
+  tools: ActionTools,
+  input: { title: string; destination: string; lat: number; lon: number },
+): Promise<Place | null> {
+  for (const query of locateQueries(input.title)) {
+    if (mocksExternalApis(env)) {
+      if (/\bnowhere\b/i.test(query)) return null
+      return { name: query, address: 'Test Street', lat: input.lat + 0.004, lon: input.lon + 0.006 }
+    }
+    const places = await openStreetMapPlaces(env, tools, { tripId: '', query, destination: input.destination, lat: input.lat, lon: input.lon })
+    const hit = places?.find((p) => typeof p.lat === 'number' && typeof p.lon === 'number' && placeMatches(p.name, query))
+    if (hit) return hit
+  }
+  return null
+}

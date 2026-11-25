@@ -9,7 +9,7 @@ import { DayColumn, type Viewer } from '../../../../components/trip/DayColumn'
 import type { ForecastLoad } from '../../../../components/trip/DayWeather'
 import type { MapPadding, MapPoint } from '../../../../components/trip/TripMap'
 import { TripTopBar, type Person } from '../../../../components/trip/TripTopBar'
-import { callAction } from '../../../../lib/actions'
+import { callAction, locateStop } from '../../../../lib/actions'
 import { hasCoords } from '../../../../lib/geo'
 import { formatDay, todayIso, tripDays, tripOverlapsForecast } from '../../../../lib/trip-dates'
 import { useMediaQuery } from '../../../../lib/use-media-query'
@@ -223,6 +223,7 @@ function TripBoard({ trip, onRetry }: { trip: RecordData<Trip>; onRetry: () => v
     const { day, ...fields } = patch
     await putConfirmed(stop.recordId, fields)
     if (day && day !== stop.data.day) await callAction('moveStop', { tripId, stopId: stop.recordId, day })
+    if (fields.title && fields.title !== stop.data.title) locateStop(tripId, stop.recordId)
   }
 
   async function deleteTrip() {

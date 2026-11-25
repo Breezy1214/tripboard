@@ -11,7 +11,8 @@ import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker.js'
 import type { Stop, TripForecast } from '../types.js'
 import { isIsoDate, todayIso, tripDays, tripOverlapsForecast } from '../lib/trip-dates.js'
-import { fetchForecast, getTrip, isTripMember } from './trip-services.js'
+import { locatePlace } from './places.js'
+import { fetchForecast, getTrip, isTripMember, takeFreeQuota } from './trip-services.js'
 
 export const MAX_STOPS_PER_TRIP = 300
 const FORECAST_TTL_MS = 60 * 60 * 1000
@@ -140,6 +141,35 @@ export async function removeStopFor(
   const removed = await tools.remove('stops', found.data.stop.recordId)
   if (!removed.success) return fail('failed', removed.error)
   return { success: true, data: { stopId: found.data.stop.recordId, title: found.data.stop.data.title } }
+}
+
+/**
+ * Puts a stop on the map from its title (free OpenStreetMap lookup near the
+ * trip). Runs after a stop is added or renamed; a title it cannot place keeps
+ * whatever pin it had. Counts against the caller's daily `locate` quota.
+ */
+export async function locateStopFor(
+  env: Env,
+  tools: ActionTools,
+  userId: string,
+  input: { tripId: unknown; stopId: unknown },
+): Promise<ServiceResult<{ located: boolean; lat?: number; lon?: number }>> {
+  const found = await memberStop(tools, text(input.tripId, 100), text(input.stopId, 100), userId)
+  if (!found.success) return found
+  const { trip, stop } = found.data
+  const { lat, lon, destination, placeLabel } = trip.data
+  if (typeof lat !== 'number' || typeof lon !== 'number') return { success: true, data: { located: false } }
+  if (!(await takeFreeQuota(env, tools, userId, 'locate'))) return fail('limit', 'Daily map lookup limit reached')
+  const place = await locatePlace(env, tools, { title: stop.data.title, destination: placeLabel || destination, lat, lon })
+  if (!place || typeof place.lat !== 'number' || typeof place.lon !== 'number') return { success: true, data: { located: false } }
+  const updated = await tools.update('stops', stop.recordId, {
+    lat: place.lat,
+    lon: place.lon,
+    placeName: place.name.slice(0, 160),
+    ...(place.address ? { address: place.address.slice(0, 240) } : {}),
+  })
+  if (!updated.success) return fail('failed', updated.error)
+  return { success: true, data: { located: true, lat: place.lat, lon: place.lon } }
 }
 
 export type ForecastStatus = 'no_location' | 'outside_window' | 'cached' | 'updated'

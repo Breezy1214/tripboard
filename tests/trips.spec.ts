@@ -253,3 +253,33 @@ test('a stop can only move to a day inside its trip', async ({ users }) => {
     await deleteTrip(alex.page, tripId)
   }
 })
+
+test('a stop added by hand is placed on the map from its title, members only', async ({ users }) => {
+  const [alex, casey] = await users(2)
+  let tripId: string | undefined
+  try {
+    await alex.page.goto('/home')
+    tripId = await createTrip(alex.page, 'Map placement', { startInDays: 2, length: 2 })
+    await alex.page.goto(`/trips/${tripId}`)
+    const day1 = alex.page.getByTestId('day-column').first()
+    await expect(day1.getByTestId('add-stop-button')).toBeEnabled({ timeout: 20_000 })
+    await day1.getByTestId('add-stop-button').click()
+    await day1.getByLabel('Title').fill('Lunch at Time Out Market')
+    await day1.getByRole('button', { name: 'Add stop' }).click()
+    await expect(day1.getByRole('button', { name: 'Show Lunch at Time Out Market on the map' })).toBeVisible({ timeout: 20_000 })
+
+    const vague = await action(alex.page, 'addStop', { tripId, day: isoInDays(2), title: 'Dinner' })
+    const vagueId = (vague.body.data as { stopId: string }).stopId
+    const missed = await action(alex.page, 'locateStop', { tripId, stopId: vagueId })
+    expect(missed.body).toMatchObject({ success: true, data: { located: false } })
+
+    await casey.page.goto('/home')
+    const outsider = await action(casey.page, 'locateStop', { tripId, stopId: vagueId })
+    expect(outsider.body).toMatchObject({ success: false, error: 'You are not a member of this trip' })
+
+    const direct = await recordSocketWrite(alex.page, { op: 'put', collection: 'stops', recordId: vagueId, data: { lat: 1, lon: 1 } })
+    expect(direct).toMatchObject({ success: false })
+  } finally {
+    await deleteTrip(alex.page, tripId)
+  }
+})

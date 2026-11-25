@@ -1,7 +1,7 @@
 import type { ActionHandler, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import { addDays, todayIso, validateTripDates } from '../lib/trip-dates'
-import { addStopFor, moveStopFor, refreshTripForecast, text } from '../server/board-services'
+import { addStopFor, locateStopFor, moveStopFor, refreshTripForecast, text } from '../server/board-services'
 import { fillUsageForTests, geocode, getTrip, isTripMember, reservePaidCall, takeFreeQuota } from '../server/trip-services'
 
 const INVITE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
@@ -125,6 +125,11 @@ const moveStop: ActionHandler<Env> = async ({ userId, params, tools }) => {
   return result.success ? { success: true, data: result.data } : fail(result.error)
 }
 
+const locateStop: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
+  const result = await locateStopFor(env, tools, userId, { tripId: params.tripId, stopId: params.stopId })
+  return result.success ? { success: true, data: result.data } : fail(result.error)
+}
+
 const createInvite: ActionHandler<Env> = async ({ userId, params, tools }) => {
   const tripId = text(params.tripId, 100)
   if (!(await isTripMember(tools, tripId, userId))) return fail('You are not a member of this trip')
@@ -208,6 +213,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
   createSampleTrip,
   addStop,
   moveStop,
+  locateStop,
   createInvite,
   joinTrip,
   refreshForecast,

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, Plus } from 'lucide-react'
 import { useToast } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { callAction } from '../../lib/actions'
+import { callAction, locateStop } from '../../lib/actions'
 import { distanceKm, formatDistance, hasCoords } from '../../lib/geo'
 import { formatDay } from '../../lib/trip-dates'
 import type { DayWeather as DayWeatherData, Stop } from '../../types'
@@ -74,8 +74,9 @@ export function DayColumn({
   async function addStop(input: Pick<Stop, 'title' | 'time' | 'notes'>) {
     setSaving(true)
     try {
-      await callAction('addStop', { tripId, day, ...input })
+      const { stopId } = await callAction<{ stopId: string }>('addStop', { tripId, day, ...input })
       setAdding(false)
+      locateStop(tripId, stopId)
     } catch (err) {
       error('Could not add the stop', err instanceof Error ? err.message : undefined)
     } finally {

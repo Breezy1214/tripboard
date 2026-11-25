@@ -21,6 +21,7 @@ import { weatherLabel } from '../lib/weather-codes.js'
 import { createActionTools } from '../server/action-routes.js'
 import {
   addStopFor,
+  locateStopFor,
   MAX_STOPS_PER_TRIP,
   memberTrip,
   moveStopFor,
@@ -174,7 +175,12 @@ export function buildTools(executor: ToolExecutor, context: AgentToolContext<Env
       lon: z.number().optional(),
       rating: z.number().optional(),
     }),
-    execute: async (input) => unwrap(await addStopFor(actionTools, userId, { ...input, source: 'ai' })),
+    execute: async (input) => {
+      const added = unwrap(await addStopFor(actionTools, userId, { ...input, source: 'ai' }))
+      // No coordinates from a place search: try to put it on the map from its title (free, best effort).
+      if (input.lat === undefined || input.lon === undefined) await locateStopFor(env, actionTools, userId, { tripId: input.tripId, stopId: added.stopId })
+      return added
+    },
   })
 
   tools.move_stop = tool({

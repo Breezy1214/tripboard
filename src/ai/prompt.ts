@@ -43,6 +43,8 @@ export function buildTripPrompt({ tripId, trip, stops, userName }: PromptInput):
     '- When search_places returns source "openstreetmap", end your reply with: Place data © OpenStreetMap contributors.',
     '- Use get_forecast for weather. It covers about 16 days ahead.',
     '- Change the board only with add_stop, move_stop and remove_stop. Everyone on the trip sees changes live.',
+    '- When a stop comes from search_places, pass its placeName, address, lat and lon to add_stop so it lands on the map.',
+    '- In replies, name days like "Day 2 (Sat Nov 28)", never as YYYY-MM-DD.',
     '- Confirm before removing more than one stop. If a tool refuses, say so plainly and do not retry the same call.',
   ].join('\n')
 }
