@@ -14,7 +14,7 @@
  */
 
 import { useState } from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import { Link, Outlet, useSearchParams } from 'react-router-dom'
 import { AuthGate, AuthOverlay } from 'deepspace'
 import { Button } from '@/components/ui'
 import { CenteredCard } from '../../../components/shell/CenteredCard'
@@ -28,13 +28,15 @@ export default function ProtectedLayout() {
 }
 
 function SignedOutPanel() {
-  const [showAuthModal, setShowAuthModal] = useState(false)
+  // "Start planning" on the landing page links here with ?signin=1, so the provider picker opens at once.
+  const [params] = useSearchParams()
+  const [showAuthModal, setShowAuthModal] = useState(params.get('signin') === '1')
 
   return (
     <CenteredCard>
       <h1 className="text-xl font-semibold tracking-tight text-foreground">Sign in to continue</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Sign in with Google to see your trips and join the ones you are invited to.
+        Sign in with Google or GitHub to see your trips and join the ones you are invited to.
       </p>
       <Button className="mt-6 w-full" onClick={() => setShowAuthModal(true)}>
         Sign in

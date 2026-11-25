@@ -37,7 +37,7 @@ export default function Landing() {
             <BrandMark />
             {PRODUCT_NAME}
           </span>
-          <Link to="/home" className="rounded-lg px-3 py-1.5 text-sm font-medium text-foreground hover:bg-secondary">
+          <Link to="/home?signin=1" className="rounded-lg px-3 py-1.5 text-sm font-medium text-foreground hover:bg-secondary">
             Sign in
           </Link>
         </header>
@@ -53,12 +53,12 @@ export default function Landing() {
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-4">
               <Link
-                to="/home"
+                to="/home?signin=1"
                 className="inline-flex h-11 items-center rounded-xl bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90"
               >
                 Start planning
               </Link>
-              <span className="text-sm text-muted-foreground">Free. Sign in with Google, then open the sample trip.</span>
+              <span className="text-sm text-muted-foreground">Free. Sign in with Google or GitHub, then open the sample trip.</span>
             </div>
           </section>
 
