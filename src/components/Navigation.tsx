@@ -1,9 +1,4 @@
-/**
- * App sidebar. A column on large screens (collapsible to an icon rail) and a
- * top bar with a drawer on phones. Keep the data-testid hooks
- * (`app-navigation`, `nav-sign-in-button`, `nav-user-name`, `nav-user-email`):
- * the shipped tests rely on them.
- */
+// Tests rely on the data-testid hooks: app-navigation, nav-sign-in-button, nav-user-name, nav-user-email.
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'

@@ -1,20 +1,4 @@
-/**
- * DO-backed AI chat surface.
- *
- * Pass `chatId={null}` to create a chat on first send. The panel keeps the
- * created id itself; `onChatCreated` merely notifies, and a parent-passed
- * `chatId` — including a change back to null for "new chat" — always wins.
- */
-
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { AlertCircle, ArrowUp, Square } from 'lucide-react'
 import { useQuery } from 'deepspace'
 import { ChatLoading, EmptyState, MessageTurn, ThinkingIndicator } from './ChatPanel.messages'
@@ -37,21 +21,13 @@ type RenderMessage = {
 }
 
 export type ChatPanelProps = {
-  /** Active chat. `null` creates one on first send and the panel keeps it — a never-passed `chatId` means one chat per mount; remount with `key` for a new one. */
+  /** `null` creates a chat on first send; the panel keeps it until this prop changes. */
   chatId: string | null
   /** Current user id; scopes the messages query as defense in depth. */
   userId: string
-  /** The trip this chat belongs to. */
   tripId: string
-  /** Notified with the id when the panel creates a chat on first send. */
-  onChatCreated?: (chatId: string) => void
-  /** Clickable prompts shown when the conversation is empty. */
-  emptyStatePrompts?: string[]
-  /** Applied to the outer container. */
+  emptyStatePrompts: string[]
   className?: string
-  /** Optional content rendered above the messages. */
-  header?: ReactNode
-  /** Tighter spacing for narrow containers. */
   compact?: boolean
   /** Suspends send while a parent-owned create is in flight. */
   disabled?: boolean
@@ -59,20 +35,12 @@ export type ChatPanelProps = {
   loading?: boolean
 }
 
-const DEFAULT_PROMPTS = [
-  'What is the weather on day 2?',
-  'Find a good breakfast spot',
-  'Add a sunset viewpoint on the last day',
-]
-
 export function ChatPanel({
   chatId,
   userId,
   tripId,
-  onChatCreated,
-  emptyStatePrompts = DEFAULT_PROMPTS,
+  emptyStatePrompts,
   className,
-  header,
   compact = false,
   disabled = false,
   loading = false,
@@ -82,10 +50,8 @@ export function ChatPanel({
   const stickToBottomRef = useRef(true)
   const [input, setInput] = useState('')
 
-  // Uncontrolled fallback: with `chatId={null}` the panel keeps the chat it
-  // auto-creates on first send, so the overlay, the messages query, and later
-  // sends all target that chat. Any prop change — including back to null,
-  // which means "new chat" — takes precedence and clears it.
+  // With `chatId={null}` the panel keeps the chat it creates on first send, so the
+  // overlay, the messages query and later sends all target it. A prop change wins.
   const [ownChatId, setOwnChatId] = useState<string | null>(null)
   const [seenChatId, setSeenChatId] = useState(chatId)
   if (seenChatId !== chatId) {
@@ -94,18 +60,10 @@ export function ChatPanel({
   }
   const activeChatId = chatId ?? ownChatId
 
-  const handleChatCreated = useCallback(
-    (id: string) => {
-      setOwnChatId(id)
-      onChatCreated?.(id)
-    },
-    [onChatCreated],
-  )
-
   const { send, stop, retry, isLoading, error, inFlight } = useStreamingChat({
     chatId: activeChatId,
     tripId,
-    onChatCreated: handleChatCreated,
+    onChatCreated: setOwnChatId,
   })
 
   const queryWhere = useMemo(
@@ -208,7 +166,6 @@ export function ChatPanel({
     <div
       className={`relative flex h-full min-h-0 flex-col bg-card text-foreground ${textSize} ${className ?? ''}`}
     >
-      {header && <div className="shrink-0">{header}</div>}
 
       <div
         ref={scrollRef}

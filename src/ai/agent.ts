@@ -1,12 +1,4 @@
-/**
- * One coordinator for the generated app's two assistant surfaces:
- *
- * - the in-app assistant is the website AI chat UI;
- * - the local assistant is the user's Codex, Claude, or similar client.
- *
- * The CLI only bridges a local assistant to these Worker routes. It does not
- * authorize or host either assistant.
- */
+/** One authorization policy for both the in-app co-planner and local agents (Claude Code, a shell). */
 
 import type { Hono } from 'hono'
 import { registerAgentToolRoutes, resolveAppMembership } from 'deepspace/worker'
@@ -15,13 +7,6 @@ import { registerAiChatRoutes } from './chat-routes.js'
 import { resolveAgentAuth, resolveAuth } from '../server/http-routes.js'
 import type { AppContext, Env } from '../../worker.js'
 
-/**
- * `buildTools` from src/ai/tools.ts. Its first argument runs record tools as
- * the caller and returns whole results; each tool's own result is capped for
- * the model where the SDK hands it over. Tools that need the Worker's
- * bindings take the second: the request's `env`, the verified `userId`, and
- * the `request` (store files with `appFiles(context.env, ...)`).
- */
 type ToolFactory = AgentToolRouteOptions<Env>['buildTools']
 
 export interface AgentAuthorizationContext {
@@ -32,22 +17,12 @@ export interface AgentAuthorizationContext {
 }
 
 export interface RegisterAgentOptions {
-  /** The existing app-owned tool factory from src/ai/tools.ts. */
   tools: ToolFactory
-  /** Enable the website AI chat UI. Defaults to true. */
   inApp?: boolean
-  /** Enable the user's local Codex/Claude/etc. assistant. Defaults to true. */
   local?: boolean
-  /**
-   * Optional app-specific gate for subscriptions, teams, roles, or app data.
-   * It only narrows access after verified identity and app membership succeed.
-   */
+  /** Can only narrow access, after identity and app membership pass. */
   authorize?: (context: AgentAuthorizationContext) => boolean | Promise<boolean>
-  /**
-   * The record room a verified caller's tools run in and their membership is
-   * read from, for an app that keeps a room per user or team. Decide it from
-   * the verified `userId`, never from input. Defaults to the app's room.
-   */
+  /** Decide from the verified userId, never from input. Defaults to the app's room. */
   room?: (userId: string, env: Env) => string
 }
 
@@ -56,13 +31,7 @@ function createAccessResolver(options: RegisterAgentOptions, resolveIdentity: ty
     const auth = await resolveIdentity(request, env)
     if (!auth) return { ok: false, status: 401 }
 
-    // Membership has exactly one definition — the caller's row in the users
-    // collection of the room their tools run in (the owner is always a
-    // member); a signed-in app visit creates it. It is the same primitive
-    // that gates the admin and realtime routes. A membership read that could
-    // not complete is 503 (retryable), never 403: a transient room failure
-    // must not present as a permission denial. The grant carries the room, so
-    // the tools run exactly where membership was checked.
+    // A membership read that could not complete is 503 (retryable), never 403.
     const room = options.room?.(auth.userId, env)
     const membership = await resolveAppMembership(env, auth.userId, request.signal, { room })
     if (!membership) return { ok: false, status: 503 }
@@ -76,7 +45,7 @@ function createAccessResolver(options: RegisterAgentOptions, resolveIdentity: ty
           return { ok: false, status: 403 }
         }
       } catch {
-        // The callback failed rather than denied — fail closed but retryable.
+        // Failed rather than denied: fail closed but retryable.
         return { ok: false, status: 503 }
       }
     }
@@ -85,10 +54,6 @@ function createAccessResolver(options: RegisterAgentOptions, resolveIdentity: ty
   }
 }
 
-/**
- * Register generated app assistant routes with one authorization policy for
- * both the website AI and the local assistant. The CLI is only their bridge.
- */
 export function registerAgent(app: Hono<AppContext>, options: RegisterAgentOptions): void {
   if (options.inApp !== false) {
     registerAiChatRoutes(app, createAccessResolver(options, resolveAuth), options.tools)

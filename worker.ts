@@ -1,10 +1,3 @@
-/**
- * App Worker — explicit assembly for DeepSpace app routes and Durable Objects.
- *
- * Route implementations live under src/server. Keep their registration order
- * here: specific API and WebSocket handlers must precede the SPA fallback.
- */
-
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import {
@@ -47,8 +40,8 @@ export const __DO_MANIFEST__ = [
 export class AppRecordRoom extends RecordRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, schemas, { ownerUserId: env.OWNER_USER_ID })
-    // usage went from one counter row per (userId, day, kind) to one row per call.
-    // The SDK adds uniqueOn indexes but never drops a removed one.
+    // usage moved from one counter row per (userId, day, kind) to one row per call,
+    // and the SDK adds uniqueOn indexes but never drops a removed one.
     this.sql.exec('DROP INDEX IF EXISTS "uniq_c_usage_userId_day_kind"')
   }
 }
@@ -57,7 +50,6 @@ export class AppYjsRoom extends YjsRoom<Env> {}
 export class AppCanvasRoom extends CanvasRoom<Env> {}
 export class AppPresenceRoom extends PresenceRoom<Env> {}
 
-/** Runs the scheduled tasks defined in src/cron.ts. */
 export class AppCronRoom extends CronRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, { tasks: cronTasks })
@@ -68,7 +60,6 @@ export class AppCronRoom extends CronRoom<Env> {
   }
 }
 
-/** Runs durable background work defined in src/jobs.ts. */
 export class AppJobRoom extends JobRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, {
@@ -87,47 +78,23 @@ export class AppJobRoom extends JobRoom<Env> {
 
 export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
   ASSETS: Fetcher
-  /**
-   * Platform service binding in production; deepspace dev supplies the URL
-   * fallback. Standard app files use the platform's shared, app-scoped R2
-   * bucket rather than a local binding.
-   */
   PLATFORM_WORKER?: Fetcher
   PLATFORM_WORKER_URL?: string
-  /**
-   * HMAC app credential minted on first deploy. Proxy routes omit identity
-   * headers when it is absent so upstream services fail closed.
-   */
   APP_IDENTITY_TOKEN?: string
-  /** API service binding in production with a deepspace-dev URL fallback. */
   API_WORKER?: Fetcher
   API_WORKER_URL?: string
   AUTH_JWT_PUBLIC_KEY: string
   AUTH_JWT_ISSUER: string
   AUTH_WORKER_URL: string
-  /** Comma-separated exact Expo/native callback URIs (for example, myapp://auth/callback). */
   NATIVE_AUTH_REDIRECT_URIS?: string
   APP_NAME: string
-  /** Immutable record-scope and platform identity. */
   DEEPSPACE_APP_ID: string
   OWNER_USER_ID: string
-  /**
-   * Long-lived owner JWT used for developer-billed server calls. User-billed
-   * calls always forward the signed-in caller's JWT instead.
-   */
   APP_OWNER_JWT: string
-  /**
-   * Enables /api/debug/* only when exactly "true". The route still requires
-   * an authenticated app owner/admin. deepspace dev/test set it locally.
-   */
   ALLOW_DEBUG_ROUTES?: string
-  /**
-   * "true" only in Playwright runs (vite.config.ts sets it for `vite serve`
-   * when TRIPBOARD_MOCK_EXTERNAL=1). Paid integrations and Open-Meteo then
-   * return canned data so no test spends credits.
-   */
+  /** "true" only in Playwright runs (set by vite.config.ts for `vite serve`): external calls return canned data. */
   MOCK_EXTERNAL_APIS?: string
-  /** Set with MOCK_EXTERNAL_APIS: one id per Playwright run, so each run counts usage from zero. */
+  /** One id per Playwright run, so each run counts usage from zero. */
   MOCK_RUN_ID?: string
 }
 
@@ -135,21 +102,16 @@ export type AppContext = { Bindings: Env }
 
 const app = new Hono<AppContext>()
 app.use('/api/*', cors())
-// A Durable Object exists only once something fetches it, and the CronRoom
-// arms its alarm in that first fetch — so wake it from the request path, or a
-// deployed schedule waits for a visitor. Once per isolate; no-op without tasks.
+// The CronRoom arms its alarm on first fetch, so wake it from the request path. No-op without tasks.
 app.use('*', async (c, next) => {
   armCronRoom(c.executionCtx, c.env.CRON_ROOMS, `app:${c.env.DEEPSPACE_APP_ID}`, cronTasks)
   await next()
 })
 
-// Registration order is part of the worker contract. The wildcard auth route
-// follows its special cases, AI precedes platform proxies, and static is last.
+// Order matters: the wildcard auth route follows its special cases, AI precedes platform proxies, static is last.
 registerAuthAndIntegrationRoutes(app)
 registerRealtimeRoutes(app)
 registerActionRoutes(app, resolveAuth)
-// Every scaffold exposes selected tools through HTTP, MCP and browser tools.
-// Only copilot owns the collections needed for the in-app chat UI.
 registerAgent(app, {
   tools: buildTools,
   inApp: schemas.some((schema) => schema.name === AI_CHATS_SCHEMA.name),
@@ -157,12 +119,7 @@ registerAgent(app, {
 registerPlatformProxyRoutes(app)
 registerStaticRoutes(app)
 
-// Hono registers ONE error handler (last onError wins), and its default is
-// `console.error(err)` — whose message Workers Logs drops, keeping only the
-// stack frames. workerErrorHandler logs the string form instead (message
-// first, frames and bounded cause chain, method + path for context), keeps a
-// response-bearing error's (HTTPException — auth 401s, upload 413s) own
-// answer, and returns a generic 500 for the rest.
+// Hono's default onError logs only stack frames in Workers Logs; this keeps the message and returns a generic 500.
 app.onError(workerErrorHandler('error'))
 
 export default app

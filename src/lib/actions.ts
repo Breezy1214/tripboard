@@ -13,7 +13,7 @@ export async function callAction<T>(name: string, params: Record<string, unknown
   return body.data as T
 }
 
-/** Best effort: puts a stop on the map from its title. The pin arrives live through the stops query; a miss changes nothing. */
+/** Best effort: the pin arrives live through the stops query; a miss changes nothing. */
 export function locateStop(tripId: string, stopId: string) {
   callAction('locateStop', { tripId, stopId }).catch(() => undefined)
 }

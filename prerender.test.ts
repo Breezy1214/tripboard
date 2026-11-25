@@ -40,8 +40,7 @@ async function buildPages(noindex: boolean) {
   })
 
   const plugin = prerender()
-  // Exercise the real client-output hook, with only the separate SSR compiler
-  // replaced by a deterministic entry. Assertions cover shipped HTML/files.
+  // Only the SSR compiler is replaced; the client-output hook is the real one.
   const configResolved = plugin.configResolved as (config: ResolvedConfig) => void
   configResolved({ command: 'build', root, define: {} } as ResolvedConfig)
   const closeBundle = plugin.closeBundle as (this: unknown) => Promise<void>

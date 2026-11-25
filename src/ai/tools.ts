@@ -198,11 +198,7 @@ export function buildTools(executor: ToolExecutor, context: AgentToolContext<Env
   return tools
 }
 
-/**
- * Built-in tools describe params as a flat ToolSchema. The Zod validator is
- * the single source; the provider-facing JSON Schema is derived with Zod's
- * own conversion, which keeps z.record() objects open (`where` filters).
- */
+/** Zod's own JSON Schema conversion keeps z.record() objects (`where` filters) open. */
 function buildInputSchema(def: ToolSchema) {
   const shape: Record<string, z.ZodTypeAny> = {}
 

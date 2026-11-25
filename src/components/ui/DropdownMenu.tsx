@@ -11,8 +11,6 @@ const DropdownMenuRadioGroup = MenuPrimitive.RadioGroup
 const DropdownMenuSub = MenuPrimitive.SubmenuRoot
 
 function DropdownMenuTrigger(props: MenuPrimitive.Trigger.Props) {
-  // To render a custom element as the trigger (e.g. a Button), pass Base UI's
-  // `render` prop: <DropdownMenuTrigger render={<Button>…</Button>} />.
   return <MenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />
 }
 
@@ -119,8 +117,7 @@ function DropdownMenuLabel({
   inset,
   ...props
 }: React.ComponentProps<'div'> & { inset?: boolean }) {
-  // A plain styled label — Base UI's GroupLabel must sit inside a Menu.Group,
-  // but our call sites place labels standalone (Radix allowed that).
+  // Base UI's GroupLabel must sit inside a Menu.Group; this label can stand alone.
   return (
     <div
       data-slot="dropdown-menu-label"

@@ -187,7 +187,6 @@ const ROUTES = [
   'M-10 110 C 70 90, 90 30, 160 50 S 260 120, 340 80',
 ]
 
-/** A quiet map-like cover: contour rings and a dotted route between stops. */
 function RouteArt({ seed = 0, className }: { seed?: number; className?: string }) {
   const path = ROUTES[seed % ROUTES.length]
   return (

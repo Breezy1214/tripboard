@@ -48,12 +48,7 @@ type UseStreamingChatOptions = {
   onChatCreated?: (id: string) => void
 }
 
-/**
- * Applies one decoded stream action to the in-flight overlay.
- *
- * This is deliberately pure: the SDK owns wire decoding, this reducer owns
- * overlay semantics, and the hook below owns transport and React lifecycle.
- */
+/** Pure on purpose: the SDK decodes the wire, this reducer owns the overlay, the hook owns transport. */
 export function reduceStreamMessages(
   messages: InFlightMessage[],
   action: AiStreamAction,

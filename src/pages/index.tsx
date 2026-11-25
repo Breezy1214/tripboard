@@ -1,7 +1,4 @@
-/**
- * Landing page — a STATIC page (no DeepSpace providers, prerendered at build).
- * Keep it renderable without a browser: no window/document during render.
- */
+// Static and prerendered at build: no window or document during render.
 
 import { Link } from 'react-router-dom'
 import { CloudSun, Map, Sparkles, Users } from 'lucide-react'

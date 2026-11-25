@@ -34,7 +34,6 @@ const RULES: Array<[RegExp, LucideIcon]> = [
   [/\b(photo|tour)\b/i, Camera],
 ]
 
-/** A category icon guessed from the stop's title and place name. */
 export function stopIcon(text: string): LucideIcon {
   return RULES.find(([pattern]) => pattern.test(text))?.[1] ?? MapPin
 }

@@ -1,18 +1,9 @@
 import { test, expect } from '@playwright/test'
 import { captureConsoleErrors } from './helpers/errors'
 
-/**
- * Smoke tests covering both page kinds this template ships:
- *   - '/'      → the static landing (top level of src/pages/): no providers,
- *                so no auth fetch and no records WebSocket on load.
- *   - '/home'  → a dynamic page (under src/pages/(app)/): the providers mount,
- *                the nav shell renders, and the records WebSocket connects.
- *
- * The "static contract" test is the guardrail for the per-page opt-out: if
- * someone moves the providers back up into _app.tsx, it fails.
- */
+// The landing is static (no providers, no auth fetch, no records socket). The "static contract"
+// test fails if someone moves the providers back up into _app.tsx.
 
-/** Wait for the React app shell (present on every page). */
 async function waitForApp(page: import('@playwright/test').Page) {
   await page.waitForSelector('[data-testid="app-root"]', { timeout: 15000 })
 }
@@ -27,9 +18,7 @@ test.describe('Smoke tests', () => {
   })
 
   test('landing carries one title, one description, one canonical', async ({ page }) => {
-    // <Seo> (src/pages/index.tsx, values from src/seo.ts) hoists these into
-    // <head>. Exactly one of each: index.html ships no static description or
-    // canonical, because React 19 would not dedupe against them on mount.
+    // index.html ships no static description or canonical: React 19 would not dedupe <Seo>'s copies.
     await page.goto('/')
     await expect(page.getByTestId('static-landing')).toBeVisible()
     await expect(page).toHaveTitle(/\S/)
@@ -42,7 +31,7 @@ test.describe('Smoke tests', () => {
     page.on('request', (req) => {
       if (req.url().includes('/api/auth/')) offenders.push(req.url())
     })
-    // Only the DO room route counts — vite's own HMR socket is a dev artifact.
+    // Only the room route counts; vite's HMR socket is a dev artifact.
     page.on('websocket', (ws) => {
       if (new URL(ws.url()).pathname.startsWith('/ws/')) offenders.push(`ws: ${ws.url()}`)
     })

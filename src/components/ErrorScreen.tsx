@@ -1,16 +1,7 @@
 /**
- * Error decoding + a friendly error screen.
- *
- * Production React replaces error text with a numeric code and a docs link
- * (e.g. `Minified React error #310`), so a developer whose app crashes in a
- * deployed build sees only the number. `decodeReactError` turns that number
- * back into a plain-English explanation; `ErrorScreen` renders it. The most
- * common offenders are the hook-order errors (#300 / #310), which almost
- * always mean a hook was placed after an early `return`.
- *
- * Self-contained on purpose: it renders as the root error boundary, replacing
- * the app shell, so it must not depend on app providers or any component
- * library. It reads its colors from the active theme's CSS variables.
+ * The root error boundary's screen. Production React reports only an error code
+ * (`Minified React error #310`), so this decodes the common ones. It replaces the
+ * app shell, so it must not depend on app providers or the component library.
  */
 
 import { AlertTriangle, RefreshCw } from 'lucide-react'
@@ -23,10 +14,7 @@ export interface DecodedReactError {
   docsUrl: string
 }
 
-/**
- * Friendly text for the React errors apps actually hit. Kept deliberately
- * small — any other code still decodes to a generic, linkable result.
- */
+/** Kept small on purpose: any other code still decodes to a generic, linkable result. */
 const REACT_ERROR_TABLE: Record<number, Omit<DecodedReactError, 'code' | 'docsUrl'>> = {
   300: {
     title: 'A component changed how many hooks it runs',
@@ -50,7 +38,6 @@ const REACT_ERROR_TABLE: Record<number, Omit<DecodedReactError, 'code' | 'docsUr
   },
 }
 
-/** Pull a React error code out of a message, whether minified, URL, or legacy form. */
 function extractReactErrorCode(message: string): number | null {
   const patterns = [/react\.dev\/errors\/(\d+)/, /invariant=(\d+)/, /Minified React error #(\d+)/]
   for (const re of patterns) {
@@ -66,11 +53,7 @@ function errorMessage(error: unknown): string | null {
   return null
 }
 
-/**
- * Decode a (possibly minified) React error into a friendly explanation, or
- * `null` if it isn't a recognizable React error — in which case the caller
- * should just show the raw message.
- */
+/** `null` when the error is not a React error code; the caller shows the raw message. */
 export function decodeReactError(error: unknown): DecodedReactError | null {
   const message = errorMessage(error)
   if (!message) return null
@@ -90,7 +73,6 @@ export function decodeReactError(error: unknown): DecodedReactError | null {
 }
 
 export interface ErrorScreenProps {
-  /** The thrown value, as caught by an error boundary (often non-Error). */
   error: unknown
   /** Recovery action. Defaults to a full page reload. */
   onReset?: () => void

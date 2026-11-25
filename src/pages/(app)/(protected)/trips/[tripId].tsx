@@ -17,7 +17,7 @@ import type { Stop, TeamMember, Trip } from '../../../../types'
 
 const FORECAST_TTL_MS = 60 * 60 * 1000
 
-// The chat brings markdown and code highlighting, the map brings WebGL; load both after the board.
+// The chat brings markdown and the map brings WebGL; load both after the board.
 const TripChat = lazy(() => import('../../../../components/trip/TripChat').then((m) => ({ default: m.TripChat })))
 const TripMap = lazy(() => import('../../../../components/trip/TripMap'))
 

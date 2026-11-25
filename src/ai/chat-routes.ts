@@ -1,21 +1,7 @@
 /**
- * AI chat routes — multi-turn tool-use via Vercel AI SDK + DeepSpace proxy.
- *
- * Registers four endpoints on the passed-in Hono app:
- *   POST   /api/ai/chats       — find or create the caller's chat for a trip (members only)
- *   PATCH  /api/ai/chats/:id   — rename / patch a chat
- *   DELETE /api/ai/chats/:id   — delete chat + cascade messages
- *   POST   /api/ai/chat        — streamed assistant turn (the big one)
- *
- * Every turn is owner-billed with claude-haiku-5-5 chosen here (a client
- * modelId is ignored), is reserved against the caller's daily cap and the
- * app-wide credit ceiling before the model runs, and is settled to its
- * measured token cost when it ends. Input is bounded (message length, history,
- * tool results, tool steps), so the cost of one turn is bounded too.
- *
- * Lives in its own file so worker.ts can stay small and the streaming
- * handler's full context (history bounds, tools, persistence, abort handling)
- * is co-located rather than scattered through the entry file.
+ * Co-planner chat routes. Every turn is owner-billed on a model chosen here, reserved
+ * against the caller's daily cap and the app-wide ceiling before the model runs, and
+ * settled to its token cost after. Input is bounded, so one turn's cost is bounded too.
  */
 
 import type { Context, Hono } from 'hono'
@@ -44,20 +30,16 @@ import { buildTripPrompt } from './prompt.js'
 import { createTestChatModel } from './test-model.js'
 import { boundHistory, chatTools, MAX_OUTPUT_TOKENS, MAX_TOOL_CALLS } from './bounds.js'
 import { loadTripContext } from './tools.js'
-// Type-only — TypeScript strips these at runtime, so no circular import
-// with worker.ts (which imports `registerAiChatRoutes` from this file).
+// Type-only, so there is no runtime import cycle with worker.ts.
 import type { Env, AppContext } from '../../worker.js'
 
 type TokenUsage = { inputTokens?: number; outputTokens?: number }
 type ResolveAccess = (req: Request, env: Env) => Promise<AgentToolAccessResult>
 type AccessGrant = Extract<AgentToolAccessResult, { ok: true }>
-/** `buildTools` from src/ai/tools.ts; it may ignore the context argument. */
 type ToolFactory = AgentToolRouteOptions<Env>['buildTools']
 
 function recordRoomStub(env: Env): DurableObjectStub {
-  // Rooms are keyed by the immutable app id — the same `app:${DEEPSPACE_APP_ID}`
-  // the client's RecordScope (SCOPE_ID) and worker.ts's own stubs use. Keying
-  // by APP_NAME would read/write a room the browser never subscribes to.
+  // Keyed by the app id, like the client's scope; APP_NAME would address a room nobody subscribes to.
   return env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
 }
 
@@ -75,8 +57,6 @@ async function findTripChat(tools: ActionTools, userId: string, tripId: string):
   return res.success ? (res.data.records[0]?.recordId ?? null) : null
 }
 
-// Derive a chat title from the first user message — first non-empty line,
-// trimmed to ~50 chars with an ellipsis.
 function deriveTitle(content: string): string {
   const first =
     content
@@ -92,7 +72,6 @@ export function registerAiChatRoutes(
   resolveAccess: ResolveAccess,
   buildTools: ToolFactory,
 ): void {
-  // One chokepoint for the access-decision → HTTP mapping on every chat route.
   const requireAccess = async (c: Context<AppContext>): Promise<AccessGrant | Response> => {
     const access = await resolveAccess(c.req.raw, c.env)
     if (access.ok) return access
@@ -105,7 +84,7 @@ export function registerAiChatRoutes(
     return c.json({ error }, access.status)
   }
 
-  // One chat per user per trip: return the caller's existing chat or create it.
+  // One chat per user per trip.
   app.post('/api/ai/chats', async (c) => {
     const access = await requireAccess(c)
     if (access instanceof Response) return access
@@ -127,7 +106,6 @@ export function registerAiChatRoutes(
     return c.json({ error: 'Could not start the chat' }, 500)
   })
 
-  // Rename / patch a chat. Ownership enforced via getChat.
   app.patch('/api/ai/chats/:id', async (c) => {
     const access = await requireAccess(c)
     if (access instanceof Response) return access
@@ -141,14 +119,12 @@ export function registerAiChatRoutes(
     const body = await c.req.json<{ title?: string }>().catch(() => ({}) as { title?: string })
     const patch: { title?: string } = {}
     if (typeof body.title === 'string') patch.title = body.title
-    // `updateChat` re-checks the chat; a delete racing this PATCH answers 404
-    // instead of `ok: true` for a write that never landed.
+    // updateChat re-checks, so a delete racing this PATCH answers 404.
     if (!(await updateChat(stub, id, auth.userId, patch)))
       return c.json({ error: 'Not found' }, 404)
     return c.json({ ok: true })
   })
 
-  // Delete chat + cascade messages.
   app.delete('/api/ai/chats/:id', async (c) => {
     const access = await requireAccess(c)
     if (access instanceof Response) return access
@@ -163,12 +139,7 @@ export function registerAiChatRoutes(
     return c.json({ ok: true })
   })
 
-  // Known limitation: two tabs sending to the same chatId concurrently can
-  // interleave row writes (DO serializes individual writes but not the
-  // per-request 3-write group). The next turn's history then mis-pairs
-  // user/assistant rows. Closing this requires per-chatId locking in the DO;
-  // out of scope for this PR. Realistic impact: rare (multi-tab same-chat
-  // usage); recoverable by user (one tab works correctly going forward).
+  // Known limitation: two tabs sending to one chat at once can interleave the turn's writes.
   app.post('/api/ai/chat', async (c) => {
     const access = await requireAccess(c)
     if (access instanceof Response) return access
@@ -215,12 +186,8 @@ export function registerAiChatRoutes(
       return c.json({ error, code: reservation.reason }, 429)
     }
 
-    // Load history before writing this turn. `persistTurn` later writes user then
-    // assistant as separate DO operations; the ordering is intentional, but
-    // it is not atomic.
     const history = await loadMessages(stub, chatId, auth.userId)
-    // Carry `parts` through so boundHistory can truncate stale tool results AND
-    // turnsToCoreMessages can rebuild assistant tool-call/tool-result pairs.
+    // Keep `parts` so old tool results can be truncated and tool-call pairs rebuilt.
     const rawTurns: ChatTurn[] = history.map((m) => ({
       id: m.recordId,
       role: m.role,
@@ -228,15 +195,8 @@ export function registerAiChatRoutes(
       parts: m.parts,
     }))
 
-    // Append the in-flight user message in memory so the LLM sees it; its DO
-    // write is the first persistence operation in `persistTurn`.
-    // Then dedup consecutive user messages — defense-in-depth for legacy
-    // chats with orphan user rows AND for the rare case where a prior turn's
-    // user-write succeeded but the assistant-write failed both retries.
-    // Crucial: dedup runs AFTER appending the in-flight; otherwise a trailing
-    // orphan user from history would survive the loop (no following user in
-    // raw history) and then sit next to the in-flight user, sending two
-    // consecutive user messages to the LLM.
+    // Drop orphan user rows (a prior turn whose assistant write failed). This must run after
+    // appending the new message, or a trailing orphan would sit next to it.
     const allTurns: ChatTurn[] = [...rawTurns, { id: userMessageId, role: 'user', content }]
     const turns: ChatTurn[] = []
     for (let i = 0; i < allTurns.length; i++) {
@@ -252,16 +212,9 @@ export function registerAiChatRoutes(
     }
     const baseSystem = buildTripPrompt({ ...tripContext, userName: auth.claims.name || 'a traveler' })
 
-    // Convert the bounded history into AI SDK ModelMessages, splitting
-    // assistant rows into the assistant + paired tool messages the SDK expects.
     const messages = turnsToCoreMessages(boundHistory(turns))
 
-    // The SDK executor runs each tool as the verified user, in the room the
-    // access grant admitted them to, and forwards the route's abort signal, so
-    // a tool fetch in flight is cancelled if the client navigates away
-    // mid-stream. The local assistant routes use the same executor and
-    // context, and streamDeepSpaceAgent caps each tool result for the model,
-    // keeping both surfaces' tool behavior identical.
+    // Tools run as the verified user, with the same executor the local agent routes use.
     const tools = chatTools(
       buildTools(createUserToolExecutor(c.env, auth.userId, c.req.raw.signal, { room: access.room }), {
         env: c.env,
@@ -270,16 +223,10 @@ export function registerAiChatRoutes(
       }),
     )
 
-    // Allocate the assistant row id BEFORE streaming starts so we can echo it
-    // back via a response header. The client tags its in-flight overlay with
-    // this id and dedups against the WebSocket-broadcast persisted row by id —
-    // not by comparing `spawnTime` (client clock) to `createdAt` (server clock),
-    // which broke for users whose clock was ahead of the server.
+    // Sent as X-Asst-Id so the client dedups its overlay against the saved row by id, not by clock.
     const asstId = `asst-${Date.now()}-${crypto.randomUUID()}`
 
-    // Save the finished turn: every step's messages (tool calls included), not
-    // just the final step's. Called on normal completion and when the request
-    // is aborted after at least one step completed.
+    // Saves every step's messages (tool calls included), on completion or after a partial abort.
     const persistTurn = async (text: string, responseMessages: ModelMessage[]): Promise<void> => {
       const parts = buildUiParts(responseMessages)
       if (text.trim() === '' && parts.length === 0) {
@@ -287,16 +234,9 @@ export function registerAiChatRoutes(
         return
       }
 
-      // Persist user → assistant → metadata as independent writes, not a
-      // transaction. Order matters: user FIRST so chronological reads are
-      // correct, then assistant. If user-write
-      // exhausts retries we ABORT the assistant write — otherwise we'd persist
-      // an assistant row with no preceding user row, breaking the invariant
-      // relied on by the dedup + turnsToCoreMessages loop on the next turn.
-      //
-      // The helpers return `false` (no throw) when the chat no longer exists
-      // — deleted mid-stream — and nothing was written; that is not retried,
-      // and it stops the sequence the same way an exhausted retry does.
+      // User, then assistant, then metadata, as separate writes. A failed user write stops the
+      // rest, so there is never an assistant row without its user row. `false` means the chat
+      // was deleted mid-stream.
       const writeWithRetry = async (
         label: string,
         fn: () => Promise<boolean | void>,
@@ -304,7 +244,7 @@ export function registerAiChatRoutes(
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             if ((await fn()) === false) {
-              console.warn(`[ai-chat] ${label} skipped — chat ${chatId} no longer exists`)
+              console.warn(`[ai-chat] ${label} skipped: chat ${chatId} no longer exists`)
               return false
             }
             return true
@@ -326,7 +266,7 @@ export function registerAiChatRoutes(
       )
       if (!userOk) {
         console.error(
-          '[ai-chat] FINISH aborting — user write did not land; skipping assistant + metadata to avoid orphan rows',
+          '[ai-chat] FINISH aborting: user write did not land; skipping assistant + metadata to avoid orphan rows',
         )
         return
       }
@@ -342,11 +282,7 @@ export function registerAiChatRoutes(
       )
       if (!assistantOk) return
       await writeWithRetry('chat metadata', async () => {
-        // Re-fetch so a mid-stream rename by the user isn't clobbered by a
-        // stale "auto-title" derived from the captured `chat` snapshot. A
-        // chat deleted mid-stream reads back as null; `updateChat` refuses
-        // that case on its own (an unguarded `records.update` would upsert
-        // the row back into existence), so this only decides the title.
+        // Re-read so a mid-stream rename is not overwritten by the auto-title.
         const fresh = await getChat(stub, chatId, auth.userId)
         const patch: { title?: string; model?: string } = { model: usedModelId }
         if (fresh && (!fresh.title || fresh.title === 'New chat')) {
@@ -361,8 +297,6 @@ export function registerAiChatRoutes(
       messages,
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
-      // Cancel provider and tool work with the request. `onAbort` then saves
-      // any completed steps; a zero-step abort saves nothing.
       abortSignal: c.req.raw.signal,
       onError: ({ error }: { error: unknown }) => {
         console.error(
@@ -375,8 +309,7 @@ export function registerAiChatRoutes(
         await settlePaidCall(actionTools, reservation.usageId, credits)
         await persistTurn(text, responseMessages as ModelMessage[])
       },
-      // AI SDK skips `onEnd` on abort; keep the steps that did complete. A
-      // zero-step abort keeps the reserved estimate (the call may be billed).
+      // onEnd is skipped on abort. A zero-step abort keeps the reserved estimate (the call may be billed).
       onAbort: async ({ steps }: { steps: readonly { text: string; usage: TokenUsage; response: { messages: unknown[] } }[] }) => {
         const last = steps.at(-1)
         if (!last) return
@@ -385,8 +318,7 @@ export function registerAiChatRoutes(
         await persistTurn(last.text, steps.flatMap((step) => step.response.messages) as ModelMessage[])
       },
     }
-    // Playwright runs (MOCK_EXTERNAL_APIS) swap only the model for a scripted
-    // one; route, tools, caps and persistence stay the real ones.
+    // Playwright runs swap only the model; route, tools, caps and persistence stay real.
     const result = mocksExternalApis(c.env)
       ? streamText({ ...streamOptions, model: createTestChatModel(), stopWhen: isStepCount(MAX_TOOL_CALLS + 1) })
       : streamDeepSpaceAgent(c.env, {
@@ -399,24 +331,13 @@ export function registerAiChatRoutes(
 
     return createUIMessageStreamResponse({
       headers: {
-        // Lets the client tag its in-flight assistant overlay with the same id
-        // the worker will use in `persistTurn`, so dedup against
-        // the WebSocket-broadcast row is by id (clock-skew-proof).
         'X-Asst-Id': asstId,
       },
       stream: toUIMessageStream({
         stream: result.stream,
-        // Reasoning models (o-series, Claude with extended thinking) emit
-        // `reasoning-start`/`reasoning-delta`/`reasoning-end` chunks. We
-        // don't render them today — pass them through and the user sees a
-        // stuck spinner during long thinks. Opt out at the boundary until
-        // the UI gains a "thinking" disclosure block.
+        // The UI does not render reasoning chunks.
         sendReasoning: false,
         onError: (error: unknown): string => {
-          // The return value becomes the user-visible `errorText` for every
-          // `tool-input-error` / `tool-output-error` chunk and stream-level
-          // error. Surface the real message so RBAC denials and validation
-          // failures are debuggable; log full detail server-side.
           console.error(`[ai-chat] response error: ${loggableError(error)}`)
           return chatErrorText(error)
         },
