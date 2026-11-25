@@ -1,10 +1,3 @@
-/**
- * Dialog — thin wrappers over Base UI's Dialog primitives, styled with Tailwind.
- *
- * Base UI (by the creators of Radix + Floating UI) owns the hard parts we used
- * to hand-roll: backdrop dismissal, Escape, focus trapping, scroll locking,
- * nested-dialog stacking, and enter/exit animations (via data-[open]/[closed]).
- */
 import * as React from 'react'
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import { X } from 'lucide-react'

@@ -1,44 +1,22 @@
 import type { ReactElement } from 'react'
 
-/**
- * Head tags for a public page: what search engines, AI answer engines, and
- * link previews read.
- *
- * Lives in the app, not the SDK, on purpose: importing anything from the
- * `deepspace` root pulls the SDK's client chunk (auth client and all) into the
- * landing page's bundle, and the static front door should stay light.
- *
- * `origin` and `path` together make the canonical URL
- * (`https://my-app.app.space/about`); a root-relative `ogImage` is resolved
- * against the same origin.
- */
+// Lives in the app, not the SDK: importing the `deepspace` root would pull its client chunk into the static landing page.
 export interface SeoProps {
-  /** Browser tab and search-result headline. */
   title: string
-  /** One plain sentence; shown under the title in results and previews. */
   description: string
-  /** `https://host`, no trailing slash. Required for canonical / og:url. */
+  /** `https://host`, no trailing slash. */
   origin?: string
-  /** The page's path, starting with `/`. Required for canonical / og:url. */
+  /** Starts with `/`. */
   path?: string
-  /** Preview image (1200×630). Absolute, or root-relative to `origin`. */
+  /** 1200x630, absolute or root-relative to `origin`. */
   ogImage?: string
-  /** `og:type`; `website` unless the page is an article. */
   type?: 'website' | 'article'
-  /** Ask crawlers not to list this page. */
   noindex?: boolean
 }
 
 /**
- * Renders the page's `<title>`, description, canonical, Open Graph, and
- * Twitter card tags. React 19 hoists `<title>`, `<meta>`, and `<link>` into
- * `<head>` from anywhere in the tree, so render it as the first child of the
- * page. prerender.ts stamps the same output into the static HTML at build, so
- * crawlers that do not execute JavaScript see it too.
- *
- * Routes that render no `<Seo>` must render a `<title>` of their own (the
- * `(app)` layout and the 404 page do): the prerendered page owns the document
- * title, and React removes it when this component unmounts.
+ * React 19 hoists these tags into <head>; prerender.ts stamps them into the static HTML.
+ * React removes the <title> on unmount, so routes without <Seo> render their own.
  */
 export function Seo({
   title,

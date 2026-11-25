@@ -14,8 +14,6 @@ const { ALLOWED_TOOL_NAMES, CUSTOM_TOOL_NAMES, buildTools } = await import('./to
 const START = addDays(todayIso(), 2)
 const TRIP = 'trip_1'
 
-type Exec = (input: Record<string, unknown>) => Promise<unknown>
-
 let fake: ReturnType<typeof fakeTools>
 
 function toolsFor(userId: string, env: Partial<Env> = { MOCK_EXTERNAL_APIS: 'true' }) {

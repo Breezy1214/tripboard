@@ -12,11 +12,8 @@ async function main() {
   const router = createBrowserRouter(routes)
   installStaleChunkRecovery(router)
 
-  // Let the router finish loading the first route's code-split module before
-  // rendering. Until then it renders only a loading fallback — and on a page
-  // prerender.ts wrote at build (the landing), React must hydrate the
-  // HTML already on screen with the real page, or it discards that markup and
-  // repaints.
+  // Load the first route's module before rendering, so a prerendered page hydrates
+  // the HTML on screen instead of discarding it and repainting.
   if (!router.state.initialized) {
     await new Promise<void>((done) => {
       const stop = router.subscribe((state) => {
@@ -33,9 +30,8 @@ async function main() {
   // are served the empty shell) renders from scratch.
   if (root.dataset.prerendered === window.location.pathname && !router.state.errors) {
     hydrateRoot(root, app, {
-      // React recovers from a mismatch by repainting from scratch, so the page
-      // still works — but the visitor saw a flicker and the cause is invisible
-      // in `deepspace dev`, which never prerenders. Name it.
+      // React recovers by repainting, but the flicker is invisible in `deepspace dev`
+      // (which never prerenders), so name it.
       onRecoverableError(error) {
         console.error(
           `[prerender] The static HTML for ${window.location.pathname} did not match what React rendered, so React repainted it. ` +

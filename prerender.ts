@@ -1,29 +1,8 @@
 /**
- * Build-time prerender of the public pages (the approach deep.space uses).
- *
- * A DeepSpace app is a client-rendered SPA: `dist/client/index.html` is an
- * empty `<div id="root">`, so a crawler that does not run JavaScript (Bing,
- * link unfurlers, every AI answer engine) reads a blank page with a bare
- * title. After `vite build` writes the client bundle, this plugin renders the
- * pages listed in src/prerender-entry.tsx with react-dom/server and writes:
- *
- *   - `<route>.html` per page (`/` → index.html, `/about` → about.html), the
- *     built template with the page's <Seo> head stamped in and #root filled.
- *     FLAT, not `about/index.html`: the platform's asset layer runs
- *     Cloudflare's default `html_handling: auto-trailing-slash`, which serves
- *     about.html at /about (200) — a nested file would 307 /about → /about/
- *     and contradict the page's canonical URL.
- *   - `_spa.html`, the untouched empty shell. src/server/http-routes.ts serves
- *     it for client routes (/home, /settings, …) so a refresh there never
- *     paints the landing page or hands crawlers the `/` canonical.
- *   - `sitemap.xml`, and the `Sitemap:` line appended to public/robots.txt's
- *     copy. With `noindex`, allow crawling of the removal directive and omit
- *     the sitemap. Per-page noindex pages are also omitted from the sitemap.
- *
- * Why a Vite plugin: `deepspace deploy` runs `npx vite build` directly, never
- * package.json scripts, so this is the only seam that runs at deploy time.
- * `deepspace dev` never runs it — dev serves the SPA; <Seo> still sets the
- * head at runtime. Delete `prerender()` from vite.config.ts for a plain SPA.
+ * Prerenders the public pages in src/prerender-entry.tsx after `vite build`, so crawlers
+ * that skip JavaScript read real content. Writes flat `<route>.html` (a nested
+ * `about/index.html` would 307 to a trailing slash), `_spa.html` for client routes, and the
+ * sitemap. A Vite plugin because `deepspace deploy` runs `vite build` directly.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -41,20 +20,13 @@ const BODY_ANCHOR = '<div data-testid="app-root"'
 /** Re-entrancy guard: the nested SSR build must not run this plugin again. */
 const PASS_ENV = 'DEEPSPACE_PRERENDER_PASS'
 
-/** What the built src/prerender-entry.tsx exports. */
 interface Entry {
   PRERENDER_ROUTES: readonly string[]
   render(route: string): string
   seo: { origin: string; noindex: boolean }
 }
 
-/**
- * Public origin every canonical URL and the sitemap hang off. `deepspace
- * deploy` sets DEEPSPACE_SITE_ORIGIN for the build it runs (staging resolves
- * to spacestest.com); a plain `vite build` derives it from wrangler.toml's
- * top-level `name`. src/seo.ts reads it as `__DEEPSPACE_SITE_ORIGIN__` and is
- * the place to override it once a custom domain is attached.
- */
+/** `deepspace deploy` sets DEEPSPACE_SITE_ORIGIN; a plain `vite build` falls back to wrangler.toml's name. */
 function siteOrigin(): string {
   if (process.env.DEEPSPACE_SITE_ORIGIN) return process.env.DEEPSPACE_SITE_ORIGIN
   const name = /^name\s*=\s*"([^"]+)"/m.exec(readFileSync(join(appDir, 'wrangler.toml'), 'utf8'))?.[1]
@@ -76,10 +48,7 @@ export function prerender(): Plugin {
     },
     async closeBundle() {
       if (config.command !== 'build' || ran || process.env[PASS_ENV]) return
-      // The Cloudflare plugin builds the worker environments first and the
-      // client last, each with its own closeBundle. Only the client's output
-      // has the template, so run on that environment alone (matched by its
-      // output dir, the thing this plugin actually depends on).
+      // Each environment has its own closeBundle; only the client output has the template.
       const clientDir = join(config.root, 'dist', 'client')
       const envOutDir = this.environment?.config?.build?.outDir
       if (envOutDir ? resolve(config.root, envOutDir) !== clientDir : this.environment?.name !== 'client') return
@@ -91,9 +60,7 @@ export function prerender(): Plugin {
         throw new Error(`[prerender] dist/client/index.html has no '${ROOT_PLACEHOLDER}' to fill — keep the scaffold's empty root container.`)
       }
 
-      // 1. Isolated SSR pass with the same defines (app id, site origin) and
-      //    alias the client saw: no config file, no cloudflare(), no
-      //    generouted(), and (via PASS_ENV) not this plugin.
+      // Isolated SSR pass with the client's defines and alias, and (via PASS_ENV) not this plugin.
       const ssrDir = join(config.root, 'dist', 'prerender')
       process.env[PASS_ENV] = '1'
       try {
@@ -118,11 +85,8 @@ export function prerender(): Plugin {
       const entry = (await import(pathToFileURL(join(ssrDir, 'entry.mjs')).href)) as Entry
       const { origin, noindex } = entry.seo
 
-      // 2. The plain shell first, from the untouched template.
       writeFileSync(join(clientDir, SHELL_FILE), noindex ? withNoindexMeta(template) : template)
 
-      // 3. Each page, in the order PAGES lists them (the template was read above,
-      //    so overwriting index.html here is safe in any order).
       const routes = entry.PRERENDER_ROUTES
       const indexableRoutes: string[] = []
       for (const route of routes) {
@@ -139,26 +103,20 @@ export function prerender(): Plugin {
         }
         let page = stampHead(template, head).replace(
           ROOT_PLACEHOLDER,
-          // Replacer FUNCTION: a replacement STRING would expand `$&`/`$$`
-          // appearing in the page's copy. data-prerendered tells src/main.tsx
-          // to hydrate this markup instead of repainting it.
+          // A replacer function, because a replacement string would expand `$&` in page copy.
+          // data-prerendered tells src/main.tsx to hydrate instead of repainting.
           () => `<div id="root" data-prerendered="${route}">${body}</div>`,
         )
-        // Site policy applies even when a page forgets to spread seo into
-        // <Seo>. A page-level exclusion must also stay out of the sitemap.
         if (noindex) page = withNoindexMeta(page)
         if (!hasNoindexMeta(page)) indexableRoutes.push(route)
         if (page.includes('__DEEPSPACE_APP_ID__')) {
           throw new Error(`[prerender] ${route} contains the literal __DEEPSPACE_APP_ID__; the deploy would refuse it.`)
         }
         const file = join(clientDir, route === '/' ? 'index.html' : `${route.slice(1)}.html`)
-        // `/legal/privacy` → legal/privacy.html; writeFileSync does not create the folder.
         mkdirSync(dirname(file), { recursive: true })
         writeFileSync(file, page)
       }
 
-      // 4. Crawler files. robots.txt is the app's own policy (public/), plus
-      //    the one line only the build knows.
       const robotsPath = join(clientDir, 'robots.txt')
       if (noindex) {
         // Crawlers must fetch the HTML to see noindex, including when an
@@ -183,11 +141,8 @@ export function prerender(): Plugin {
 }
 
 /**
- * Swap the template's default head tags for the page's hoisted <Seo> output:
- * strip the tags <Seo> owns (title, description, robots, canonical, og:/
- * twitter:) and keep everything else (charset, viewport, icon, hashed assets,
- * the first-paint style, any theme script). Fails if a strip no-ops — a
- * changed tag shape would otherwise ship two conflicting titles.
+ * Replaces the template's default head tags with the page's <Seo> output. Throws if a strip
+ * finds nothing, since a changed tag shape would otherwise ship two conflicting titles.
  */
 function stampHead(template: string, head: string): string {
   const stripped = template

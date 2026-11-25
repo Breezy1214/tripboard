@@ -1,17 +1,4 @@
-/**
- * Gated routes. Any file under src/pages/(app)/(protected)/ requires sign-in.
- * The `(protected)` folder is a Generouted route group — parentheses mean
- * it doesn't appear in the URL. For a dynamic page that does NOT require
- * sign-in, put it directly under src/pages/(app)/; for a static page, put it
- * at the top level of src/pages/.
- *
- * Children may call data hooks like `useUser()` safely because the parent
- * (app)/_layout.tsx mounts <RecordProvider> above this layout.
- *
- * The `fallback` keeps signed-out visitors inside the app's own chrome
- * (without it, AuthGate shows the SDK's full-screen, non-dismissible
- * overlay). The sign-in overlay opens on demand and can be dismissed.
- */
+// The fallback keeps signed-out visitors in the app's chrome; without it AuthGate shows a non-dismissible overlay.
 
 import { useState } from 'react'
 import { Link, Outlet, useSearchParams } from 'react-router-dom'
@@ -28,7 +15,7 @@ export default function ProtectedLayout() {
 }
 
 function SignedOutPanel() {
-  // "Start planning" on the landing page links here with ?signin=1, so the provider picker opens at once.
+  // The landing page links here with ?signin=1 so the provider picker opens at once.
   const [params] = useSearchParams()
   const [showAuthModal, setShowAuthModal] = useState(params.get('signin') === '1')
 

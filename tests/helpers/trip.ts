@@ -49,7 +49,6 @@ export function agentTool(page: Page, name: string, input: Record<string, unknow
   return post(page, `/_deepspace/agent/browser/tools/${name}`, { input })
 }
 
-/** Tool names the browser agent route lists for the signed-in user. */
 export function agentToolNames(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
     const tokenRes = await fetch('/api/auth/token', { method: 'POST', credentials: 'include' })
@@ -133,7 +132,6 @@ export async function deleteTrip(page: Page, tripId: string | undefined) {
   }
 }
 
-/** Whether a WebSocket to the trip's presence room is accepted for this user. */
 export function presenceAccepted(page: Page, tripId: string): Promise<boolean> {
   return page.evaluate(async (tripId) => {
     const tokenRes = await fetch('/api/auth/token', {

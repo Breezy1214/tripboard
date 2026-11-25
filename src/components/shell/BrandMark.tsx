@@ -1,6 +1,5 @@
 import { cn } from '@/lib/utils'
 
-/** Tripboard's mark: two stops joined by a route, on a pine tile. */
 export function BrandMark({ className }: { className?: string }) {
   return (
     <span aria-hidden className={cn('flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-primary', className)}>

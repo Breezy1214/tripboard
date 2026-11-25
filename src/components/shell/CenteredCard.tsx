@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { BrandMark } from './BrandMark'
 
-/** A single focused card for sign-in, invites and other one-step pages. */
 export function CenteredCard({ children, testId }: { children: ReactNode; testId?: string }) {
   return (
     <div data-testid={testId} className="flex min-h-full items-center justify-center px-4 py-16">

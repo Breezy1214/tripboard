@@ -9,8 +9,7 @@ import { prerender } from './prerender.ts'
 
 const appDir = fileURLToPath(new URL('.', import.meta.url))
 
-// Playwright's webServer sets TRIPBOARD_MOCK_EXTERNAL=1 so the dev worker
-// returns canned geocoding and forecasts. Never applied to `vite build`.
+// Only Playwright's dev server mocks external calls; never applied to `vite build`.
 const mockExternalApis = (command: string) =>
   command === 'serve' && process.env.TRIPBOARD_MOCK_EXTERNAL === '1'
 
@@ -18,11 +17,7 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     generouted(),
-    // The Cloudflare plugin otherwise searches for a free inspector port by
-    // enumerating every network interface. Restricted agent containers can
-    // reject that OS call (`uv_interface_addresses`) even when loopback is
-    // available. Inspector debugging is optional, so disable that probe in
-    // the generated app and keep local dev/test startup deterministic.
+    // The inspector-port probe enumerates network interfaces, which restricted containers reject.
     cloudflare({
       inspectorPort: false,
       ...(mockExternalApis(command)
@@ -33,24 +28,8 @@ export default defineConfig(({ command }) => ({
           }
         : {}),
     }),
-    // The app id `define`, the preview-secret cleanup, and the client dedupe
-    // hint — all shipped by the SDK so a fix to any of them arrives with a
-    // version bump, not an app edit. The app id is read from the wrangler
-    // config THIS build targets (wrangler.toml, or the env-flattened config
-    // `deepspace deploy --env` generates); src/constants.ts is the only
-    // consumer.
     deepspaceBuild({ appDir }),
-    // Prerenders the public pages listed in src/prerender-entry.tsx into static
-    // HTML at `vite build`, stamps their <Seo> head, and writes sitemap.xml plus
-    // the robots.txt Sitemap line from src/seo.ts — so crawlers that do not run
-    // JavaScript read real content. See prerender.ts; delete this line for a
-    // plain SPA.
     prerender(),
-    // Runs the Rules of Hooks lint (see eslint.config.js) automatically, so
-    // there's no separate step to remember: a violation surfaces as an overlay
-    // during `deepspace dev start` and fails the build during `deepspace deploy`.
-    // That stops the cryptic "Minified React error #310 / #300" crash before
-    // it can ship.
     checker({
       eslint: {
         lintCommand: 'eslint .',
@@ -64,16 +43,8 @@ export default defineConfig(({ command }) => ({
     },
   },
   optimizeDeps: {
-    // generouted loads routes via `import.meta.glob`, which Vite's esbuild dep-scanner
-    // does not evaluate — so every dep reachable only through the page tree (UI libs,
-    // and deepspace via _app.tsx) is invisible to the cold scan, discovered late, and
-    // triggers a re-optimize + full reload on first `dev` boot. That reload is where a
-    // transient "Cannot read properties of null (reading 'useState')" can surface before
-    // the error boundary recovers. Point the scanner at the route files (plus the html
-    // entry) so the first optimize pass is complete and no late re-optimize fires.
-    // Scoped to src/pages (NOT all of src) so worker-only modules — actions, cron, jobs,
-    // ai, which import deepspace/worker — are not dragged into the client optimizer.
-    // Dev-only; `vite build` ignores optimizeDeps.
+    // Routes load through import.meta.glob, which the dep scanner skips; listing them avoids a
+    // late re-optimize and reload on first dev boot. Only src/pages, so worker-only modules stay out.
     entries: ['./index.html', './src/pages/**/*.tsx'],
   },
 }))

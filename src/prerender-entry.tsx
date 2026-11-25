@@ -1,16 +1,7 @@
 /**
- * Build-time render entry for prerender.ts (at the app root). Never shipped to
- * the browser and never run by `deepspace dev`.
- *
- * PAGES lists the public pages — the ones at the top level of src/pages/ that
- * render with no DeepSpace providers. Add a page here when you add one, and it
- * is prerendered to static HTML and listed in sitemap.xml. Pages under
- * src/pages/(app)/ mount auth and realtime and cannot be prerendered.
- *
- * The tree below must mirror what generouted renders on the client for these
- * routes, or hydration mismatches: root route = _app's default export, then a
- * literal space, then the (empty) modals slot. See
- * node_modules/@generouted/react-router/dist/index-lazy.js before changing it.
+ * Build-time render entry for prerender.ts; never shipped. List public pages in PAGES.
+ * The tree must mirror what generouted renders on the client (root route, a literal
+ * space, the empty modals slot) or hydration mismatches.
  */
 
 import type { ComponentType } from 'react'

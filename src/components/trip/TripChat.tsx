@@ -15,11 +15,7 @@ interface Props {
 
 const PROMPTS = ['What is the weather on day 1?', 'Find a good breakfast spot near the center', 'Add a sunset viewpoint on the last day']
 
-/**
- * The co-planner: one chat per user per trip. A floating panel over the map
- * on large screens and a bottom sheet on phones. It stays mounted while
- * closed so a reply in flight is not cut off.
- */
+// Stays mounted while closed so a reply in flight is not cut off.
 export function TripChat(props: Props) {
   const [attempt, setAttempt] = useState(0)
   // A new key re-subscribes the chat queries: the in-place retry.
