@@ -25,6 +25,8 @@ async function ask(page: Page, text: string) {
   const chat = page.getByTestId('trip-chat')
   const box = chat.getByLabel('Message the co-planner')
   await expect(box).toBeEnabled({ timeout: 20_000 })
+  // Enter is ignored while a reply is still streaming; wait for the previous turn to finish.
+  await expect(chat.getByRole('button', { name: 'Send message' })).toBeVisible({ timeout: 20_000 })
   await box.fill(text)
   await box.press('Enter')
   return chat
@@ -62,6 +64,31 @@ test('a stop the AI adds for one member shows up live, marked, for the other', a
     await expect(blair.page.getByTestId('trip-chat').getByText('add Sunset at the castle on day 2')).toBeVisible({
       timeout: 20_000,
     })
+  } finally {
+    await deleteTrip(alex.page, tripId)
+  }
+})
+
+test('the co-planner moves and removes stops through the chat, live for the other member', async ({ users }) => {
+  const [alex, blair] = await users(2)
+  let tripId: string | undefined
+  try {
+    tripId = await tripWithMember(alex.page, blair.page, 'AI move and remove')
+    await action(alex.page, 'addStop', { tripId, day: isoInDays(2), title: 'Castle' })
+    await action(alex.page, 'addStop', { tripId, day: isoInDays(2), title: 'Market' })
+    await alex.page.goto(`/trips/${tripId}`)
+    const alexDays = alex.page.getByTestId('day-column')
+    await expect(alexDays.nth(0).getByTestId('stop-title')).toHaveText(['Castle', 'Market'], { timeout: 20_000 })
+
+    const chat = await ask(blair.page, 'move Castle to day 3')
+    await expect(chat.getByText('Done: move_stop finished.')).toBeVisible({ timeout: 20_000 })
+    await expect(alexDays.nth(2).getByTestId('stop-title')).toHaveText(['Castle'], { timeout: 15_000 })
+    await expect(alexDays.nth(0).getByTestId('stop-title')).toHaveText(['Market'])
+
+    await ask(blair.page, 'remove Market')
+    await expect(chat.getByText('Done: remove_stop finished.')).toBeVisible({ timeout: 20_000 })
+    await expect(alexDays.nth(0).getByTestId('stop-card')).toHaveCount(0, { timeout: 15_000 })
+    await expect(alexDays.nth(2).getByTestId('stop-title')).toHaveText(['Castle'])
   } finally {
     await deleteTrip(alex.page, tripId)
   }
