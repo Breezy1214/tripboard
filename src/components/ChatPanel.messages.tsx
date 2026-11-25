@@ -8,9 +8,8 @@ import {
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
-import rehypeHighlight from 'rehype-highlight'
 import { Check, Copy } from 'lucide-react'
-import 'highlight.js/styles/atom-one-dark.css'
+import { formatDay } from '../lib/trip-dates'
 import type {
   MessagePart,
   ToolInvocation,
@@ -102,6 +101,16 @@ export function EmptyState({
   )
 }
 
+/** Saved history is on its way: a quiet placeholder instead of the empty state flashing first. */
+export function ChatLoading() {
+  return (
+    <div role="status" aria-label="Loading the conversation" className="flex h-full flex-col justify-end gap-3 px-1 pb-2">
+      <div className="ml-auto h-8 w-2/5 animate-pulse rounded-2xl bg-muted" />
+      <div className="h-16 w-4/5 animate-pulse rounded-2xl bg-muted" />
+    </div>
+  )
+}
+
 export function ThinkingIndicator() {
   return (
     <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
@@ -164,7 +173,7 @@ function MarkdownText({ children }: { children: string }) {
     >
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        
         components={MARKDOWN_COMPONENTS}
       >
         {children}
@@ -201,7 +210,7 @@ function ToolRow({ invocation }: { invocation: ToolInvocation }) {
       </span>
       <span className={done ? 'text-muted-foreground' : 'text-foreground'}>{label}</span>
       {path && (
-        <code className="truncate font-mono text-[12.5px] text-foreground/70">{path}</code>
+        <span className="truncate font-medium text-foreground/75">{path}</span>
       )}
       {failed && <span className="text-destructive">Failed</span>}
       {!done && <EllipsisDots />}
@@ -231,6 +240,11 @@ function isFailedResult(result: unknown): boolean {
     'success' in result &&
     result.success === false
   )
+}
+
+function dayLabel(iso: string): string {
+  const { weekday, label } = formatDay(iso)
+  return `${weekday}, ${label}`
 }
 
 function describeTool(
@@ -276,7 +290,7 @@ function describeTool(
     case 'add_stop':
       return { label: 'Adding', path: typeof values?.title === 'string' ? values.title : undefined }
     case 'move_stop':
-      return { label: 'Moving a stop to', path: typeof values?.day === 'string' ? values.day : undefined }
+      return { label: 'Moving a stop to', path: typeof values?.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(values.day) ? dayLabel(values.day) : undefined }
     case 'remove_stop':
       return { label: 'Removing a stop' }
     default:
@@ -361,5 +375,4 @@ const ExternalLink = ({
 )
 
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks]
-const REHYPE_PLUGINS = [rehypeHighlight]
 const MARKDOWN_COMPONENTS = { pre: CodeBlock, a: ExternalLink } satisfies Components

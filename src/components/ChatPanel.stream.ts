@@ -311,7 +311,7 @@ export function useStreamingChat({
   return { send, stop, retry, isLoading, error, inFlight }
 }
 
-/** A JSON `{ error }` body becomes the message; a 429 (daily cap) is marked so the panel hides Retry. */
+/** A JSON `{ error }` body becomes the message; refusals that a retry cannot fix (402, 403, 413, 429) hide Retry. */
 async function responseError(response: Response): Promise<Error> {
   const detail = await response.text().catch(() => '')
   let message = detail
@@ -322,7 +322,7 @@ async function responseError(response: Response): Promise<Error> {
     // Not JSON; show the text as is.
   }
   const error = new Error(message || `Request failed: ${response.status}`)
-  if ([403, 413, 429].includes(response.status)) error.name = 'NotRetryable'
+  if ([402, 403, 413, 429].includes(response.status)) error.name = 'NotRetryable'
   return error
 }
 
@@ -387,7 +387,10 @@ function applySseLine(
 
   if (action.type === 'stream-error') {
     console.error('[chat] STREAM error', action.errorText)
-    setError(new Error(action.errorText))
+    const error = new Error(action.errorText)
+    // A retry would only spend another turn against an empty balance.
+    if (/out of credits/i.test(action.errorText)) error.name = 'NotRetryable'
+    setError(error)
   } else if (action.type === 'fail-tool-input') {
     console.error('[chat] STREAM tool-input-error', {
       toolCallId: action.toolCallId,

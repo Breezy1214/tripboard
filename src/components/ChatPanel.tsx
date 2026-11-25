@@ -17,7 +17,7 @@ import {
 } from 'react'
 import { AlertCircle, ArrowUp, Square } from 'lucide-react'
 import { useQuery } from 'deepspace'
-import { EmptyState, MessageTurn, ThinkingIndicator } from './ChatPanel.messages'
+import { ChatLoading, EmptyState, MessageTurn, ThinkingIndicator } from './ChatPanel.messages'
 import { useStreamingChat } from './ChatPanel.stream'
 import { CHAT_MESSAGE_MAX_LENGTH } from '../ai/errors'
 
@@ -55,6 +55,8 @@ export type ChatPanelProps = {
   compact?: boolean
   /** Suspends send while a parent-owned create is in flight. */
   disabled?: boolean
+  /** The parent is still finding the chat; show loading instead of the empty state. */
+  loading?: boolean
 }
 
 const DEFAULT_PROMPTS = [
@@ -73,6 +75,7 @@ export function ChatPanel({
   header,
   compact = false,
   disabled = false,
+  loading = false,
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -109,7 +112,7 @@ export function ChatPanel({
     () => ({ chatId: activeChatId ?? '__none__', userId }),
     [activeChatId, userId],
   )
-  const { records } = useQuery<AiMessageData>('ai-messages', {
+  const { records, status: messagesStatus } = useQuery<AiMessageData>('ai-messages', {
     where: queryWhere,
     orderBy: 'createdAt',
     orderDir: 'asc',
@@ -215,7 +218,9 @@ export function ChatPanel({
         aria-label="Assistant conversation"
         className={`min-h-0 flex-1 overflow-y-auto ${horizontalPadding} py-5`}
       >
-        {messages.length === 0 ? (
+        {messages.length === 0 && (loading || (activeChatId && messagesStatus === 'loading')) ? (
+          <ChatLoading />
+        ) : messages.length === 0 ? (
           <EmptyState prompts={emptyStatePrompts} onPick={selectPrompt} />
         ) : (
           <div className={`mx-auto flex max-w-[44rem] flex-col ${turnGap}`}>

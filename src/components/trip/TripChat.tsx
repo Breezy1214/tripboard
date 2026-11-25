@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { useQuery } from 'deepspace'
-import { ChevronsLeft, Sparkles, X } from 'lucide-react'
+import { ChevronsLeft, RotateCw, Sparkles, X } from 'lucide-react'
+import { Button } from '@/components/ui'
 import { cn } from '@/lib/utils'
 import { ChatPanel } from '../ChatPanel'
 
@@ -18,7 +20,13 @@ const PROMPTS = ['What is the weather on day 1?', 'Find a good breakfast spot ne
  * on large screens and a bottom sheet on phones. It stays mounted while
  * closed so a reply in flight is not cut off.
  */
-export function TripChat({ tripId, userId, open, onClose, className }: Props) {
+export function TripChat(props: Props) {
+  const [attempt, setAttempt] = useState(0)
+  // A new key re-subscribes the chat queries: the in-place retry.
+  return <TripChatPanel key={attempt} {...props} onRetry={() => setAttempt((n) => n + 1)} />
+}
+
+function TripChatPanel({ tripId, userId, open, onClose, className, onRetry }: Props & { onRetry: () => void }) {
   const chats = useQuery<{ userId: string; tripId: string }>('ai-chats', { where: { userId, tripId } })
   const chatId = chats.records[0]?.recordId ?? null
 
@@ -53,9 +61,12 @@ export function TripChat({ tripId, userId, open, onClose, className }: Props) {
           </button>
         </header>
         {chats.status === 'error' ? (
-          <p role="alert" className="p-4 text-sm text-destructive">
-            Could not load the chat: {chats.error ?? 'connection failed'}. Reload to try again.
-          </p>
+          <div role="alert" className="space-y-3 p-4 text-sm">
+            <p className="text-destructive">Could not load the chat: {chats.error ?? 'connection failed'}.</p>
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              <RotateCw aria-hidden /> Try again
+            </Button>
+          </div>
         ) : (
           <ChatPanel
             chatId={chatId}
@@ -63,6 +74,7 @@ export function TripChat({ tripId, userId, open, onClose, className }: Props) {
             tripId={tripId}
             compact
             disabled={chats.status === 'loading'}
+            loading={chats.status === 'loading' && !chatId}
             emptyStatePrompts={PROMPTS}
             className="min-h-0 flex-1"
           />
