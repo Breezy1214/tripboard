@@ -85,14 +85,24 @@ export async function addStopFor(tools: ActionTools, userId: string, input: Stop
   if (existing.success && existing.data.records.length >= MAX_STOPS_PER_TRIP) return fail('limit', 'This trip has too many stops')
 
   const onDay = await stopsOnDay(tools, tripId, day)
-  const time = text(input.time, 5)
+  const rawTime = text(input.time, 5)
+  const time = /^\d{2}:\d{2}$/.test(rawTime) ? rawTime : ''
+  // A timed stop goes before the first later-timed stop of the day; an untimed one goes last.
+  const later = time ? onDay.findIndex((s) => !!s.data.time && s.data.time > time) : -1
+  const index = later === -1 ? onDay.length : later
+  for (const [i, s] of onDay.slice(index).entries()) {
+    const position = index + i + 2
+    if (s.data.position === position) continue
+    const shifted = await tools.update('stops', s.recordId, { position })
+    if (!shifted.success) return fail('failed', shifted.error)
+  }
   const created = await tools.create('stops', {
     tripId,
     day,
-    position: Math.max(0, ...onDay.map((s) => Number(s.data.position ?? 0))) + 1,
+    position: index + 1,
     title,
     notes: text(input.notes, 1000),
-    time: /^\d{2}:\d{2}$/.test(time) ? time : '',
+    time,
     source: input.source,
     ...(text(input.placeName, 160) ? { placeName: text(input.placeName, 160) } : {}),
     ...(text(input.address, 240) ? { address: text(input.address, 240) } : {}),

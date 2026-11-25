@@ -56,6 +56,17 @@ describe('co-planner tools', () => {
     expect(row.data).toMatchObject({ tripId: TRIP, title: 'Castle at sunset', source: 'ai', addedBy: 'blair', position: 1 })
   })
 
+  it('puts a timed stop in time order and an untimed one last', async () => {
+    const run = toolsFor('alex')
+    const add = async (title: string, time?: string) =>
+      ((await run('add_stop')({ tripId: TRIP, day: START, title, ...(time ? { time } : {}) })) as { stopId: string }).stopId
+    const lunch = await add('Lunch', '13:00')
+    const free = await add('Wander')
+    const breakfast = await add('Breakfast', '09:00')
+    const pos = (id: string) => fake.table('stops').get(id)!.data.position
+    expect([pos(breakfast), pos(lunch), pos(free)]).toEqual([1, 2, 3])
+  })
+
   it('refuses every write from a non-member and writes nothing', async () => {
     await toolsFor('alex')('add_stop')({ tripId: TRIP, day: START, title: 'Coffee' })
     const stopId = [...fake.table('stops').keys()][0]
