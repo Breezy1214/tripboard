@@ -1,4 +1,4 @@
-import { useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { useId, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, Clock, MapPin, Pencil, Sparkles, Star, Trash2 } from 'lucide-react'
 import { Button, ConfirmModal, Input, Label, Textarea, useToast } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -200,7 +200,7 @@ export function StopEditor({
   const [notes, setNotes] = useState(stop.notes ?? '')
   const [day, setDay] = useState(stop.day ?? '')
   const [error, setError] = useState<string | null>(null)
-  const idBase = `stop-${stop.day ?? 'new'}`
+  const idBase = `stop-${useId()}`
 
   function submit(e: FormEvent) {
     e.preventDefault()

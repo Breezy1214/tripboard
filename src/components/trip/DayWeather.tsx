@@ -56,9 +56,13 @@ export function DayWeather({ day, today, hasLocation, weather, load, onRetry }: 
   return (
     <div data-testid="day-weather" className={`${base} text-foreground`} title={label}>
       <Icon aria-hidden className="size-4 text-primary" />
+      <span className="sr-only">{label}, high </span>
       <span className="font-medium">{weather.max}°</span>
-      <span className="text-muted-foreground">{weather.min}°C</span>
-      <span className="sr-only">{label}</span>
+      <span className="text-muted-foreground">
+        <span aria-hidden>/ </span>
+        <span className="sr-only">low </span>
+        {weather.min}°C
+      </span>
       {weather.precip !== null && <span className="text-muted-foreground">· {weather.precip}% rain</span>}
     </div>
   )
